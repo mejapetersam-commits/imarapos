@@ -28,3 +28,5 @@ use the editor.
   own key and store it in Secrets.
 - **Secrets.** Lovable manages them. Do not put secret values in the repo.
 <!-- LOVABLE:END -->
+
+Store POS records in the public schema with a required business_id tenant boundary and database-enforced row policies, so business data stays isolated as the app grows.
