@@ -15,6 +15,13 @@
       "when": 1794505399709,
       "tag": "0001_pos_business_policies",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794505444797,
+      "tag": "0002_pos_atomic_inventory",
+      "breakpoints": true
     }
   ]
 }

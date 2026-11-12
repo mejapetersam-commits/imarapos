@@ -173,6 +173,13 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "customer_addresses_business_customer_fkey"
+            columns: ["business_id", "customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["business_id", "id"]
+          },
+          {
             foreignKeyName: "customer_addresses_business_id_fkey"
             columns: ["business_id"]
             isOneToOne: false
@@ -304,6 +311,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "inventory_business_product_fkey"
+            columns: ["business_id", "product_id"]
+            isOneToOne: true
+            referencedRelation: "products"
+            referencedColumns: ["business_id", "id"]
+          },
+          {
             foreignKeyName: "inventory_product_id_fkey"
             columns: ["product_id"]
             isOneToOne: false
@@ -351,11 +365,25 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "payments_business_customer_fkey"
+            columns: ["business_id", "customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["business_id", "id"]
+          },
+          {
             foreignKeyName: "payments_business_id_fkey"
             columns: ["business_id"]
             isOneToOne: false
             referencedRelation: "businesses"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payments_business_sale_fkey"
+            columns: ["business_id", "sale_id"]
+            isOneToOne: false
+            referencedRelation: "sales"
+            referencedColumns: ["business_id", "id"]
           },
           {
             foreignKeyName: "payments_customer_id_fkey"
@@ -427,11 +455,25 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "products_business_category_fkey"
+            columns: ["business_id", "category_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["business_id", "id"]
+          },
+          {
             foreignKeyName: "products_business_id_fkey"
             columns: ["business_id"]
             isOneToOne: false
             referencedRelation: "businesses"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "products_business_supplier_fkey"
+            columns: ["business_id", "supplier_id"]
+            isOneToOne: false
+            referencedRelation: "suppliers"
+            referencedColumns: ["business_id", "id"]
           },
           {
             foreignKeyName: "products_category_id_fkey"
@@ -510,6 +552,20 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "purchase_order_items_business_order_fkey"
+            columns: ["business_id", "purchase_order_id"]
+            isOneToOne: false
+            referencedRelation: "purchase_orders"
+            referencedColumns: ["business_id", "id"]
+          },
+          {
+            foreignKeyName: "purchase_order_items_business_product_fkey"
+            columns: ["business_id", "product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["business_id", "id"]
+          },
+          {
             foreignKeyName: "purchase_order_items_product_id_fkey"
             columns: ["product_id"]
             isOneToOne: false
@@ -563,6 +619,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "businesses"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_orders_business_supplier_fkey"
+            columns: ["business_id", "supplier_id"]
+            isOneToOne: false
+            referencedRelation: "suppliers"
+            referencedColumns: ["business_id", "id"]
           },
           {
             foreignKeyName: "purchase_orders_supplier_id_fkey"
@@ -619,6 +682,20 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "sale_items_business_product_fkey"
+            columns: ["business_id", "product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["business_id", "id"]
+          },
+          {
+            foreignKeyName: "sale_items_business_sale_fkey"
+            columns: ["business_id", "sale_id"]
+            isOneToOne: false
+            referencedRelation: "sales"
+            referencedColumns: ["business_id", "id"]
+          },
+          {
             foreignKeyName: "sale_items_product_id_fkey"
             columns: ["product_id"]
             isOneToOne: false
@@ -673,6 +750,13 @@ export type Database = {
         }
         Relationships: [
           {
+            foreignKeyName: "sales_business_customer_fkey"
+            columns: ["business_id", "customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["business_id", "id"]
+          },
+          {
             foreignKeyName: "sales_business_id_fkey"
             columns: ["business_id"]
             isOneToOne: false
@@ -726,6 +810,13 @@ export type Database = {
             isOneToOne: false
             referencedRelation: "businesses"
             referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "stock_movements_business_product_fkey"
+            columns: ["business_id", "product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["business_id", "id"]
           },
           {
             foreignKeyName: "stock_movements_product_id_fkey"
@@ -817,6 +908,29 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      add_product_with_stock: {
+        Args: {
+          p_barcode: string
+          p_business_id: string
+          p_category_id: string
+          p_cost_price: number
+          p_initial_stock: number
+          p_low_stock_threshold: number
+          p_name: string
+          p_selling_price: number
+          p_sku: string
+        }
+        Returns: string
+      }
+      adjust_inventory: {
+        Args: {
+          p_business_id: string
+          p_product_id: string
+          p_quantity_delta: number
+          p_reason: string
+        }
+        Returns: number
+      }
       has_business_role: {
         Args: {
           _business_id: string
