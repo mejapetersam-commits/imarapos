@@ -20,6 +20,7 @@ type Props = {
   customersCount: number;
   categoriesCount: number;
   loading: boolean;
+  canManage: boolean;
   onAddProduct: () => void;
   onOpenInventory: () => void;
 };
@@ -70,9 +71,11 @@ export function Dashboard(p: Props) {
           <p className="text-sm text-muted-foreground">Overview</p>
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">{p.name}</h1>
         </div>
-        <Button onClick={p.onAddProduct}>
-          <PackagePlus /> Add product
-        </Button>
+        {p.canManage && (
+          <Button onClick={p.onAddProduct}>
+            <PackagePlus /> Add product
+          </Button>
+        )}
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -123,9 +126,15 @@ export function Dashboard(p: Props) {
               );
             })}
           </ol>
-          <Button className="mt-6" onClick={p.onAddProduct}>
-            <PackagePlus /> Add your first product
-          </Button>
+          {p.canManage ? (
+            <Button className="mt-6" onClick={p.onAddProduct}>
+              <PackagePlus /> Add your first product
+            </Button>
+          ) : (
+            <p className="mt-6 text-sm text-muted-foreground">
+              Ask an owner or manager to add the first products.
+            </p>
+          )}
         </div>
       ) : (
         <div className="grid gap-6 lg:grid-cols-5">

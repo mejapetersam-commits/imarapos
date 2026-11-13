@@ -6,6 +6,7 @@ export type Product = {
   sku: string;
   barcode: string | null;
   category_id: string | null;
+  supplier_id: string | null;
   cost_price: number;
   selling_price: number;
   low_stock_threshold: number;
@@ -13,5 +14,15 @@ export type Product = {
   inventory: { quantity_on_hand: number } | null;
   category: string;
 };
+export type Supplier = {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  notes: string | null;
+  product_count: number;
+};
+export type Role = "owner" | "manager" | "cashier";
 export type AuthMode = "signin" | "signup";
-export type Page = "dashboard" | "inventory";
+export type Page = "dashboard" | "inventory" | "suppliers";

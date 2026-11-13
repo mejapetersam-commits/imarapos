@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { authClient, authConfigured, getToken } from "@/auth";
 import {
@@ -6,6 +6,10 @@ import {
   createBusiness as createBusinessFn,
   createCategory as createCategoryFn,
   createProduct as createProductFn,
+  createSupplier as createSupplierFn,
+  deleteSupplier as deleteSupplierFn,
+  updateProduct as updateProductFn,
+  updateSupplier as updateSupplierFn,
   listBusinesses,
   loadBusinessData as loadBusinessDataFn,
   type Result,
@@ -17,9 +21,24 @@ import { Button } from "@/components/ui/button";
 import { AppShell } from "@/components/pos/AppShell";
 import { AuthScreen } from "@/components/pos/AuthScreen";
 import { Dashboard } from "@/components/pos/Dashboard";
-import { BusinessForm, CategoryForm, ProductForm, StockForm } from "@/components/pos/Forms";
+import {
+  BusinessForm,
+  CategoryForm,
+  ProductForm,
+  StockForm,
+  SupplierForm,
+} from "@/components/pos/Forms";
 import { Inventory } from "@/components/pos/Inventory";
-import type { AuthMode, Business, Category, Page, Product } from "@/components/pos/types";
+import { Suppliers } from "@/components/pos/Suppliers";
+import type {
+  AuthMode,
+  Business,
+  Category,
+  Page,
+  Product,
+  Role,
+  Supplier,
+} from "@/components/pos/types";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -55,6 +74,12 @@ function Index() {
   const [loading, setLoading] = useState(false);
   const [showBusinessForm, setShowBusinessForm] = useState(false);
   const [showProductForm, setShowProductForm] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [supplierForm, setSupplierForm] = useState<Supplier | "new" | null>(null);
+  const [role, setRole] = useState<Role>("cashier");
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const [showStockForm, setShowStockForm] = useState<Product | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("signin");
   const [authEmail, setAuthEmail] = useState("");
@@ -79,6 +104,7 @@ function Index() {
       setBusinesses([]);
       setActiveBusiness(null);
       setProducts([]);
+      setSuppliers([]);
     }
   }, [user?.id]);
 
@@ -129,6 +155,7 @@ function Index() {
           sku: row.sku,
           barcode: row.barcode,
           category_id: row.category_id,
+          supplier_id: row.supplier_id,
           cost_price: row.cost_price,
           selling_price: row.selling_price,
           low_stock_threshold: row.low_stock_threshold,
@@ -141,6 +168,8 @@ function Index() {
         })),
       );
       setCategories(result.categories);
+      setSuppliers(result.suppliers);
+      setRole(result.role);
       setSalesCount(result.salesCount);
       setRevenue(result.revenue);
       setCustomersCount(result.customersCount);
@@ -191,58 +220,118 @@ function Index() {
     }
   }
 
+  /** Runs a save once at a time, so a double-click can never submit twice. */
+  async function guarded(task: () => Promise<void>) {
+    if (savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await task();
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
+  }
+
+  const text = (form: FormData, key: string) => String(form.get(key) ?? "").trim();
+  const optional = (form: FormData, key: string) => text(form, key) || null;
+
   async function createBusiness(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!user) return;
-    const form = new FormData(event.currentTarget);
-    const name = String(form.get("businessName") ?? "").trim();
+    const name = text(new FormData(event.currentTarget), "businessName");
     if (!name) return;
-    const business = await api((token) => createBusinessFn({ data: { token, name } }));
-    if (!business) return;
-    setBusinesses((current) => [...current, business]);
-    setActiveBusiness(business);
-    setShowBusinessForm(false);
-    toast.success("Business created.");
+    await guarded(async () => {
+      const business = await api((token) => createBusinessFn({ data: { token, name } }));
+      if (!business) return;
+      setBusinesses((current) => [...current, business]);
+      setActiveBusiness(business);
+      setShowBusinessForm(false);
+      toast.success("Business created.");
+    });
+  }
+
+  function readProduct(form: FormData) {
+    return {
+      name: text(form, "name"),
+      sku: text(form, "sku"),
+      barcode: text(form, "barcode"),
+      category_id: text(form, "categoryId") || null,
+      supplier_id: text(form, "supplierId") || null,
+      cost_price: Number(form.get("costPrice")),
+      selling_price: Number(form.get("sellingPrice")),
+      low_stock_threshold: Number(form.get("threshold")),
+      initial_stock: Number(form.get("initialStock") ?? 0),
+    };
   }
 
   async function createProduct(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!activeBusiness) return;
-    const form = new FormData(event.currentTarget);
-    const product = {
-      name: String(form.get("name") ?? "").trim(),
-      sku: String(form.get("sku") ?? "").trim(),
-      barcode: String(form.get("barcode") ?? "").trim(),
-      category_id: String(form.get("categoryId") ?? "") || null,
-      cost_price: Number(form.get("costPrice")),
-      selling_price: Number(form.get("sellingPrice")),
-      low_stock_threshold: Number(form.get("threshold")),
-      initial_stock: Number(form.get("initialStock")),
-    };
+    const product = readProduct(new FormData(event.currentTarget));
     if (!isValidNewProduct(product)) {
       toast.error("Check the product details and enter zero or higher for prices and stock.");
       return;
     }
-    const id = await api((token) =>
-      createProductFn({
-        data: {
-          token,
-          businessId: activeBusiness.id,
-          name: product.name,
-          sku: product.sku,
-          barcode: product.barcode || null,
-          categoryId: product.category_id,
-          costPrice: product.cost_price,
-          sellingPrice: product.selling_price,
-          lowStockThreshold: product.low_stock_threshold,
-          initialStock: product.initial_stock,
-        },
-      }),
-    );
-    if (!id) return;
-    setShowProductForm(false);
-    toast.success("Product added to inventory.");
-    await loadBusinessData(activeBusiness);
+    await guarded(async () => {
+      const id = await api((token) =>
+        createProductFn({
+          data: {
+            token,
+            businessId: activeBusiness.id,
+            name: product.name,
+            sku: product.sku,
+            barcode: product.barcode || null,
+            categoryId: product.category_id,
+            supplierId: product.supplier_id,
+            costPrice: product.cost_price,
+            sellingPrice: product.selling_price,
+            lowStockThreshold: product.low_stock_threshold,
+            initialStock: product.initial_stock,
+          },
+        }),
+      );
+      if (!id) return;
+      setShowProductForm(false);
+      toast.success("Product added to inventory.");
+      await loadBusinessData(activeBusiness);
+    });
+  }
+
+  async function updateProduct(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeBusiness || !editingProduct) return;
+    const form = new FormData(event.currentTarget);
+    const product = { ...readProduct(form), initial_stock: 0 };
+    if (!isValidNewProduct(product)) {
+      toast.error("Check the product details and enter zero or higher for prices.");
+      return;
+    }
+    const target = editingProduct;
+    await guarded(async () => {
+      const done = await api((token) =>
+        updateProductFn({
+          data: {
+            token,
+            businessId: activeBusiness.id,
+            productId: target.id,
+            name: product.name,
+            sku: product.sku,
+            barcode: product.barcode || null,
+            categoryId: product.category_id,
+            supplierId: product.supplier_id,
+            costPrice: product.cost_price,
+            sellingPrice: product.selling_price,
+            lowStockThreshold: product.low_stock_threshold,
+            active: form.get("active") === "on",
+          },
+        }),
+      );
+      if (!done) return;
+      setEditingProduct(null);
+      toast.success("Product updated.");
+      await loadBusinessData(activeBusiness);
+    });
   }
 
   async function adjustStock(event: React.FormEvent<HTMLFormElement>) {
@@ -255,30 +344,83 @@ function Index() {
       toast.error("That adjustment would leave stock below zero.");
       return;
     }
-    const note = String(form.get("reason") ?? "").trim() || "Manual adjustment";
-    const quantity = await api((token) =>
-      adjustStockFn({
-        data: { token, businessId: activeBusiness.id, productId: showStockForm.id, delta, note },
-      }),
-    );
-    if (quantity === null) return;
-    setShowStockForm(null);
-    toast.success("Stock updated.");
-    await loadBusinessData(activeBusiness);
+    const note = text(form, "reason") || "Manual adjustment";
+    const target = showStockForm;
+    await guarded(async () => {
+      const quantity = await api((token) =>
+        adjustStockFn({
+          data: { token, businessId: activeBusiness.id, productId: target.id, delta, note },
+        }),
+      );
+      if (quantity === null) return;
+      setShowStockForm(null);
+      toast.success("Stock updated.");
+      await loadBusinessData(activeBusiness);
+    });
   }
 
   async function createCategory(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!activeBusiness) return;
-    const form = new FormData(event.currentTarget);
-    const name = String(form.get("categoryName") ?? "").trim();
+    const formElement = event.currentTarget;
+    const name = text(new FormData(formElement), "categoryName");
     if (!name) return;
-    const category = await api((token) =>
-      createCategoryFn({ data: { token, businessId: activeBusiness.id, name } }),
-    );
-    if (!category) return;
-    setCategories((current) => [...current, category].sort((a, b) => a.name.localeCompare(b.name)));
-    toast.success("Category added.");
+    await guarded(async () => {
+      const category = await api((token) =>
+        createCategoryFn({ data: { token, businessId: activeBusiness.id, name } }),
+      );
+      if (!category) return;
+      setCategories((current) =>
+        [...current, category].sort((a, b) => a.name.localeCompare(b.name)),
+      );
+      formElement.reset();
+      toast.success("Category added.");
+    });
+  }
+
+  async function saveSupplier(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeBusiness || !supplierForm) return;
+    const form = new FormData(event.currentTarget);
+    const fields = {
+      name: text(form, "name"),
+      phone: optional(form, "phone"),
+      email: optional(form, "email"),
+      address: optional(form, "address"),
+      notes: optional(form, "notes"),
+    };
+    if (!fields.name) return;
+    const existing = supplierForm === "new" ? null : supplierForm;
+    await guarded(async () => {
+      const done = existing
+        ? await api((token) =>
+            updateSupplierFn({
+              data: { token, businessId: activeBusiness.id, supplierId: existing.id, ...fields },
+            }),
+          )
+        : await api((token) =>
+            createSupplierFn({ data: { token, businessId: activeBusiness.id, ...fields } }),
+          );
+      if (!done) return;
+      setSupplierForm(null);
+      toast.success(existing ? "Supplier updated." : "Supplier added.");
+      await loadBusinessData(activeBusiness);
+    });
+  }
+
+  async function removeSupplier(supplier: Supplier) {
+    if (!activeBusiness || !window.confirm(`Delete ${supplier.name}? This cannot be undone.`))
+      return;
+    await guarded(async () => {
+      const done = await api((token) =>
+        deleteSupplierFn({
+          data: { token, businessId: activeBusiness.id, supplierId: supplier.id },
+        }),
+      );
+      if (!done) return;
+      toast.success("Supplier deleted.");
+      await loadBusinessData(activeBusiness);
+    });
   }
 
   async function signOut() {
@@ -312,6 +454,9 @@ function Index() {
         onSubmit={handleAuthSubmit}
       />
     );
+
+  const canManage = role === "owner" || role === "manager";
+  const activeProducts = products.filter((product) => product.active);
 
   return (
     <AppShell
@@ -351,27 +496,40 @@ function Index() {
       ) : activePage === "dashboard" ? (
         <Dashboard
           name={activeBusiness.name}
-          products={products}
+          products={activeProducts}
           revenue={revenue}
           salesCount={salesCount}
           customersCount={customersCount}
           categoriesCount={categories.length}
           loading={loading}
+          canManage={canManage}
           onAddProduct={() => setShowProductForm(true)}
           onOpenInventory={() => setActivePage("inventory")}
+        />
+      ) : activePage === "suppliers" ? (
+        <Suppliers
+          suppliers={suppliers}
+          loading={loading}
+          canManage={canManage}
+          onAdd={() => setSupplierForm("new")}
+          onEdit={setSupplierForm}
+          onDelete={removeSupplier}
         />
       ) : (
         <Inventory
           products={products}
           categories={categories}
           loading={loading}
+          canManage={canManage}
           onAddProduct={() => setShowProductForm(true)}
           onAddCategory={() => setShowCategoryForm(true)}
           onAdjust={setShowStockForm}
+          onEdit={setEditingProduct}
         />
       )}
       {showBusinessForm && (
         <BusinessForm
+          saving={saving}
           onSubmit={createBusiness}
           onCancel={() => setShowBusinessForm(false)}
           canCancel={businesses.length > 0}
@@ -380,6 +538,7 @@ function Index() {
       {showCategoryForm && (
         <CategoryForm
           categories={categories}
+          saving={saving}
           onSubmit={createCategory}
           onClose={() => setShowCategoryForm(false)}
         />
@@ -387,15 +546,36 @@ function Index() {
       {showProductForm && (
         <ProductForm
           categories={categories}
+          suppliers={suppliers}
+          saving={saving}
           onSubmit={createProduct}
           onClose={() => setShowProductForm(false)}
+        />
+      )}
+      {editingProduct && (
+        <ProductForm
+          product={editingProduct}
+          categories={categories}
+          suppliers={suppliers}
+          saving={saving}
+          onSubmit={updateProduct}
+          onClose={() => setEditingProduct(null)}
         />
       )}
       {showStockForm && (
         <StockForm
           product={showStockForm}
+          saving={saving}
           onSubmit={adjustStock}
           onClose={() => setShowStockForm(null)}
+        />
+      )}
+      {supplierForm && (
+        <SupplierForm
+          supplier={supplierForm === "new" ? null : supplierForm}
+          saving={saving}
+          onSubmit={saveSupplier}
+          onClose={() => setSupplierForm(null)}
         />
       )}
     </AppShell>

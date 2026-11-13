@@ -10,6 +10,7 @@ import {
   Plus,
   Settings2,
   ShoppingCart,
+  Truck,
   Users,
   X,
 } from "lucide-react";
@@ -24,6 +25,7 @@ type NavItem = {
 const NAV: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, ready: true },
   { id: "inventory", label: "Inventory", icon: Boxes, ready: true },
+  { id: "suppliers", label: "Suppliers", icon: Truck, ready: true },
   { id: "sales", label: "Sales & POS", icon: ShoppingCart, ready: false },
   { id: "customers", label: "Customers", icon: Users, ready: false },
   { id: "payments", label: "Payments", icon: CreditCard, ready: false },

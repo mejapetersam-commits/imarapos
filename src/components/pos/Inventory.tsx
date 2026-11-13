@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { LoaderCircle, PackagePlus, Search, SlidersHorizontal, Tags } from "lucide-react";
+import { LoaderCircle, PackagePlus, Pencil, Search, SlidersHorizontal, Tags } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatKes, formatQuantity, stockState } from "@/lib/format";
@@ -9,6 +9,8 @@ type Props = {
   products: Product[];
   categories: Category[];
   loading: boolean;
+  canManage: boolean;
+  onEdit: (product: Product) => void;
   onAddProduct: () => void;
   onAddCategory: () => void;
   onAdjust: (product: Product) => void;
@@ -23,15 +25,18 @@ const BADGE = {
 export function Inventory(p: Props) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("all");
+  const [showArchived, setShowArchived] = useState(false);
+  const archivedCount = p.products.filter((x) => !x.active).length;
   const rows = useMemo(() => {
     const term = query.trim().toLowerCase();
     return p.products.filter(
       (x) =>
+        (showArchived || x.active) &&
         (category === "all" || x.category_id === category) &&
         (!term ||
           [x.name, x.sku, x.barcode, x.category].some((v) => v?.toLowerCase().includes(term))),
     );
-  }, [p.products, query, category]);
+  }, [p.products, query, category, showArchived]);
 
   return (
     <div className="space-y-6">
@@ -43,14 +48,16 @@ export function Inventory(p: Props) {
             {p.categories.length} {p.categories.length === 1 ? "category" : "categories"}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={p.onAddCategory}>
-            <Tags /> Add category
-          </Button>
-          <Button onClick={p.onAddProduct}>
-            <PackagePlus /> Add product
-          </Button>
-        </div>
+        {p.canManage && (
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={p.onAddCategory}>
+              <Tags /> Add category
+            </Button>
+            <Button onClick={p.onAddProduct}>
+              <PackagePlus /> Add product
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-col gap-3 sm:flex-row">
@@ -78,6 +85,17 @@ export function Inventory(p: Props) {
             </option>
           ))}
         </select>
+        {archivedCount > 0 && (
+          <label className="flex h-10 items-center gap-2 rounded-lg border bg-card px-3 text-sm">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+              className="size-4 accent-emerald-700"
+            />
+            Show archived ({archivedCount})
+          </label>
+        )}
       </div>
 
       <div className="overflow-hidden rounded-2xl border bg-card shadow-sm">
@@ -118,7 +136,9 @@ export function Inventory(p: Props) {
               <tbody className="divide-y">
                 {rows.map((x) => {
                   const qty = x.inventory?.quantity_on_hand ?? 0;
-                  const [label, tone] = BADGE[stockState(qty, x.low_stock_threshold)];
+                  const [label, tone] = x.active
+                    ? BADGE[stockState(qty, x.low_stock_threshold)]
+                    : (["Archived", "bg-muted text-muted-foreground"] as const);
                   return (
                     <tr key={x.id} className="hover:bg-muted/30">
                       <td className="px-5 py-3.5">
@@ -144,9 +164,18 @@ export function Inventory(p: Props) {
                         </span>
                       </td>
                       <td className="px-5 py-3.5 text-right">
-                        <Button size="sm" variant="outline" onClick={() => p.onAdjust(x)}>
-                          <SlidersHorizontal /> Adjust
-                        </Button>
+                        {p.canManage && (
+                          <span className="inline-flex gap-2">
+                            <Button size="sm" variant="ghost" onClick={() => p.onEdit(x)}>
+                              <Pencil /> Edit
+                            </Button>
+                            {x.active && (
+                              <Button size="sm" variant="outline" onClick={() => p.onAdjust(x)}>
+                                <SlidersHorizontal /> Adjust
+                              </Button>
+                            )}
+                          </span>
+                        )}
                       </td>
                     </tr>
                   );
@@ -156,7 +185,9 @@ export function Inventory(p: Props) {
             <ul className="divide-y md:hidden">
               {rows.map((x) => {
                 const qty = x.inventory?.quantity_on_hand ?? 0;
-                const [label, tone] = BADGE[stockState(qty, x.low_stock_threshold)];
+                const [label, tone] = x.active
+                  ? BADGE[stockState(qty, x.low_stock_threshold)]
+                  : (["Archived", "bg-muted text-muted-foreground"] as const);
                 return (
                   <li key={x.id} className="space-y-2 p-4">
                     <div className="flex items-start justify-between gap-3">
@@ -176,9 +207,18 @@ export function Inventory(p: Props) {
                       <span className="text-muted-foreground">
                         {formatQuantity(qty)} in stock · {formatKes(x.selling_price)}
                       </span>
-                      <Button size="sm" variant="outline" onClick={() => p.onAdjust(x)}>
-                        <SlidersHorizontal /> Adjust
-                      </Button>
+                      {p.canManage && (
+                        <span className="flex gap-2">
+                          <Button size="sm" variant="ghost" onClick={() => p.onEdit(x)}>
+                            <Pencil /> Edit
+                          </Button>
+                          {x.active && (
+                            <Button size="sm" variant="outline" onClick={() => p.onAdjust(x)}>
+                              <SlidersHorizontal /> Adjust
+                            </Button>
+                          )}
+                        </span>
+                      )}
                     </div>
                   </li>
                 );

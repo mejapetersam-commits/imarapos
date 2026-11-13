@@ -1,7 +1,13 @@
 # Build roadmap
 
-- [x] Establish secure multi-business data model and user profiles.
-- [ ] Build sign-in, business setup, and real-data dashboard.
-- [ ] Add live product catalogue, stock tracking, and low-stock visibility.
-- [ ] Validate the app and run relevant tests.
-- [ ] Continue staged work: checkout, customers and credit, payments, reporting, and offline/PWA support.
+- [x] 1. Authentication (Neon Auth), roles, multi-business data model and RLS.
+- [x] 2. Inventory: products, categories, stock adjustments and history, edit/archive.
+- [x] 2. Suppliers (list, create, edit, delete, link to products).
+- [ ] 2. Purchase orders and receiving stock.
+- [ ] Staff invites and team management UI (database functions already in place).
+- [ ] Password reset.
+- [ ] 3. Sales and checkout: barcode search, discounts, split payments, receipts, returns/refunds.
+- [ ] 4. Customers, credit limits and overdue tracking.
+- [ ] 5. Payments: cash, card, bank transfer, M-Pesa Daraja with reconciliation.
+- [ ] 6. Analytics and reporting.
+- [ ] 7. Product images, PWA install and offline sales with safe sync.
