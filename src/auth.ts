@@ -1,7 +1,10 @@
 import { createAuthClient } from "@neon/auth";
 import { BetterAuthReactAdapter } from "@neon/auth/react/adapters";
 
-export const authClient = createAuthClient(import.meta.env["VITE_NEON_AUTH_URL"] as string, {
+const authUrl = (import.meta.env["VITE_NEON_AUTH_URL"] as string | undefined) ?? "";
+export const authConfigured = authUrl.startsWith("https://");
+
+export const authClient = createAuthClient(authUrl || "https://auth.invalid", {
   adapter: BetterAuthReactAdapter({ fetchOptions: { credentials: "include" } }),
 });
 

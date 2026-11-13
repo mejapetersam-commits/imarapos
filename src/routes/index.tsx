@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { authClient, getToken } from "@/auth";
+import { authClient, authConfigured, getToken } from "@/auth";
 import {
   adjustStock as adjustStockFn,
   createBusiness as createBusinessFn,
@@ -204,23 +204,44 @@ function Index() {
 
   async function handleAuthSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!authConfigured) {
+      toast.error(
+        "Sign-in is not configured: VITE_NEON_AUTH_URL was missing at build time. Add it in Vercel, then redeploy.",
+      );
+      return;
+    }
     setAuthBusy(true);
     setNeedsEmailConfirmation(false);
-    if (authMode === "signup") {
-      const { data, error } = await authClient.signUp.email({
-        email: authEmail,
-        password: authPassword,
-        name: authName.trim(),
-      });
+    try {
+      const request =
+        authMode === "signup"
+          ? authClient.signUp.email({
+              email: authEmail,
+              password: authPassword,
+              name: authName.trim(),
+            })
+          : authClient.signIn.email({ email: authEmail, password: authPassword });
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(
+          () =>
+            reject(
+              new Error(
+                "The sign-in service did not respond. Check the auth URL and trusted domains.",
+              ),
+            ),
+          20000,
+        ),
+      );
+      const { data, error } = await Promise.race([request, timeout]);
+      if (error) toast.error(error.message ?? "Could not complete that request.");
+      else if (authMode === "signup" && !(data as { token?: string | null } | null)?.token)
+        setNeedsEmailConfirmation(true);
+      else toast.success(authMode === "signup" ? "Your account is ready." : "Welcome back.");
+    } catch (error) {
+      console.error("Auth request failed", error);
+      toast.error(error instanceof Error ? error.message : "Could not reach the sign-in service.");
+    } finally {
       setAuthBusy(false);
-      if (error) toast.error(error.message ?? "Could not create your account.");
-      else if (!(data as { token?: string | null } | null)?.token) setNeedsEmailConfirmation(true);
-      else toast.success("Your account is ready.");
-    } else {
-      const { error } = await authClient.signIn.email({ email: authEmail, password: authPassword });
-      setAuthBusy(false);
-      if (error) toast.error(error.message ?? "Could not sign you in.");
-      else toast.success("Welcome back.");
     }
   }
 
