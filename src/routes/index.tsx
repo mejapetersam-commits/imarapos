@@ -13,6 +13,7 @@ import {
 import { isValidNewProduct, isValidStockAdjustment } from "@/lib/pos-rules";
 import { toast } from "sonner";
 import { LoaderCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { AppShell } from "@/components/pos/AppShell";
 import { AuthScreen } from "@/components/pos/AuthScreen";
 import { Dashboard } from "@/components/pos/Dashboard";
@@ -50,6 +51,7 @@ function Index() {
   const [customersCount, setCustomersCount] = useState(0);
   const [activePage, setActivePage] = useState<Page>("dashboard");
   const [showCategoryForm, setShowCategoryForm] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showBusinessForm, setShowBusinessForm] = useState(false);
   const [showProductForm, setShowProductForm] = useState(false);
@@ -100,8 +102,12 @@ function Index() {
   }
 
   async function loadBusinesses() {
+    setLoadError(false);
     const rows = await api((token) => listBusinesses({ data: { token } }));
-    if (!rows) return;
+    if (!rows) {
+      setLoadError(true);
+      return;
+    }
     setBusinesses(rows);
     setActiveBusiness(
       (current) => rows.find((business) => business.id === current?.id) ?? rows[0] ?? null,
@@ -320,12 +326,28 @@ function Index() {
       onSignOut={signOut}
     >
       {!activeBusiness ? (
-        <div className="flex justify-center py-24">
-          <LoaderCircle
-            className="size-7 animate-spin text-muted-foreground"
-            aria-label="Loading"
-          />
-        </div>
+        loadError ? (
+          <div className="mx-auto max-w-md rounded-2xl border bg-card p-8 text-center shadow-sm">
+            <h2 className="text-lg font-semibold">We couldn’t load your workspace</h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              You’re signed in, but the server could not verify your session or reach the database.
+              The message above has the detail.
+            </p>
+            <div className="mt-6 flex justify-center gap-2">
+              <Button onClick={() => void loadBusinesses()}>Try again</Button>
+              <Button variant="outline" onClick={signOut}>
+                Sign out
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex justify-center py-24">
+            <LoaderCircle
+              className="size-7 animate-spin text-muted-foreground"
+              aria-label="Loading"
+            />
+          </div>
+        )
       ) : activePage === "dashboard" ? (
         <Dashboard
           name={activeBusiness.name}
