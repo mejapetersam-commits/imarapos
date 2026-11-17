@@ -11,6 +11,7 @@ import {
   Settings2,
   ShoppingCart,
   Truck,
+  UsersRound,
   Users,
   X,
 } from "lucide-react";
@@ -21,11 +22,13 @@ type NavItem = {
   label: string;
   icon: typeof Boxes;
   ready: boolean;
+  managersOnly?: boolean;
 };
 const NAV: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, ready: true },
   { id: "inventory", label: "Inventory", icon: Boxes, ready: true },
   { id: "suppliers", label: "Suppliers", icon: Truck, ready: true },
+  { id: "team", label: "Team", icon: UsersRound, ready: true, managersOnly: true },
   { id: "sales", label: "Sales & POS", icon: ShoppingCart, ready: false },
   { id: "customers", label: "Customers", icon: Users, ready: false },
   { id: "payments", label: "Payments", icon: CreditCard, ready: false },
@@ -43,6 +46,7 @@ type Props = {
   userName: string;
   userEmail: string;
   onSignOut: () => void;
+  canManage: boolean;
   children: React.ReactNode;
 };
 
@@ -51,29 +55,31 @@ export function AppShell(p: Props) {
   const initials = (p.userName || p.userEmail || "?").trim().slice(0, 1).toUpperCase();
   const nav = (
     <nav className="flex-1 space-y-1 px-3">
-      {NAV.map(({ id, label, icon: Icon, ready }) => {
-        const current = ready && p.page === id;
-        return (
-          <button
-            key={id}
-            disabled={!ready}
-            onClick={() => {
-              if (ready) {
-                p.onNavigate(id as Page);
-                setOpen(false);
-              }
-            }}
-            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${current ? "bg-primary text-primary-foreground shadow-sm" : ready ? "text-foreground/80 hover:bg-muted" : "cursor-not-allowed text-muted-foreground/60"}`}
-          >
-            <Icon size={18} /> <span className="flex-1 text-left">{label}</span>
-            {!ready && (
-              <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Soon
-              </span>
-            )}
-          </button>
-        );
-      })}
+      {NAV.filter((item) => !item.managersOnly || p.canManage).map(
+        ({ id, label, icon: Icon, ready }) => {
+          const current = ready && p.page === id;
+          return (
+            <button
+              key={id}
+              disabled={!ready}
+              onClick={() => {
+                if (ready) {
+                  p.onNavigate(id as Page);
+                  setOpen(false);
+                }
+              }}
+              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${current ? "bg-primary text-primary-foreground shadow-sm" : ready ? "text-foreground/80 hover:bg-muted" : "cursor-not-allowed text-muted-foreground/60"}`}
+            >
+              <Icon size={18} /> <span className="flex-1 text-left">{label}</span>
+              {!ready && (
+                <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Soon
+                </span>
+              )}
+            </button>
+          );
+        },
+      )}
     </nav>
   );
   const sidebar = (

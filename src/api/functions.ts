@@ -2,6 +2,7 @@ import { createServerFn } from "@tanstack/react-start";
 import type { PoolClient } from "@neondatabase/serverless";
 import { z } from "zod";
 import { requireRole, withDb, type Role } from "@/server/db";
+import { hashInviteToken, newInviteToken } from "@/server/invite";
 import { userIdFromToken } from "@/server/verify-token";
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: string };
@@ -286,4 +287,129 @@ export const deleteSupplier = createServerFn({ method: "POST" })
       if (!result.rowCount) throw notFound("Supplier");
       return true as const;
     }),
+  );
+
+// ---- Team and invites -------------------------------------------------------------------------
+
+const OWNER_ONLY: readonly Role[] = ["owner"];
+const inviteToken = z.string().min(20).max(100);
+const invalidInvite = () =>
+  Object.assign(new Error("This invite is invalid or has expired"), { code: "P0001" });
+
+export type TeamMember = {
+  user_id: string;
+  name: string | null;
+  email: string;
+  role: Role;
+  active: boolean;
+  joined_at: string;
+};
+export type PendingInvite = { id: string; email: string; role: Role; expires_at: string };
+
+export const loadTeam = createServerFn({ method: "POST" })
+  .validator(z.object(inBusiness))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db, userId) => {
+      const members = (
+        await db.query("SELECT user_id, name, email, role, active, joined_at FROM list_team()")
+      ).rows as TeamMember[];
+      const invites = (
+        await db.query(
+          "SELECT id, email, role, expires_at FROM business_invites WHERE accepted_at IS NULL AND expires_at > now() ORDER BY created_at DESC",
+        )
+      ).rows as PendingInvite[];
+      return { members, invites, me: userId };
+    }),
+  );
+
+export const createInvite = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      ...inBusiness,
+      email: z.string().trim().toLowerCase().email().max(160),
+      role: z.enum(["manager", "cashier"]),
+    }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, OWNER_ONLY, async (db) => {
+      const existing = await db.query(
+        "SELECT 1 FROM list_team() WHERE lower(email) = $1 AND active",
+        [data.email],
+      );
+      if (existing.rowCount)
+        throw Object.assign(new Error("That person is already on your team."), { code: "P0001" });
+      await db.query(
+        "DELETE FROM business_invites WHERE lower(email) = $1 AND accepted_at IS NULL",
+        [data.email],
+      );
+      const secret = newInviteToken();
+      await db.query(
+        "INSERT INTO business_invites (business_id, email, role, token_hash, invited_by, expires_at) VALUES (app_business(), $1, $2, $3, app_user(), now() + interval '7 days')",
+        [data.email, data.role, await hashInviteToken(secret)],
+      );
+      await db.query(
+        "INSERT INTO audit_logs (business_id, actor_id, action, entity, detail) VALUES (app_business(), app_user(), 'invite.created', 'invite', $1)",
+        [JSON.stringify({ email: data.email, role: data.role })],
+      );
+      return secret;
+    }),
+  );
+
+export const revokeInvite = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, inviteId: uuid }))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, OWNER_ONLY, async (db) => {
+      const result = await db.query(
+        "DELETE FROM business_invites WHERE id = $1 AND accepted_at IS NULL",
+        [data.inviteId],
+      );
+      if (!result.rowCount) throw notFound("Invite");
+      return true as const;
+    }),
+  );
+
+export const updateMember = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      ...inBusiness,
+      userId: uuid,
+      role: z.enum(["owner", "manager", "cashier"]),
+      active: z.boolean(),
+    }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, OWNER_ONLY, async (db) => {
+      await db.query("SELECT update_member($1, $2, $3)", [data.userId, data.role, data.active]);
+      return true as const;
+    }),
+  );
+
+export const previewInvite = createServerFn({ method: "POST" })
+  .validator(z.object({ ...base, inviteToken }))
+  .handler(({ data }) =>
+    run(data.token, null, null, async (db) => {
+      const row = (
+        await db.query("SELECT business_name, role, email FROM invite_preview($1)", [
+          await hashInviteToken(data.inviteToken),
+        ])
+      ).rows[0];
+      if (!row) throw invalidInvite();
+      return row as { business_name: string; role: Role; email: string };
+    }),
+  );
+
+export const acceptInvite = createServerFn({ method: "POST" })
+  .validator(z.object({ ...base, inviteToken }))
+  .handler(({ data }) =>
+    run(
+      data.token,
+      null,
+      null,
+      async (db) =>
+        (
+          await db.query("SELECT accept_invite($1) AS id", [
+            await hashInviteToken(data.inviteToken),
+          ])
+        ).rows[0].id as string,
+    ),
   );

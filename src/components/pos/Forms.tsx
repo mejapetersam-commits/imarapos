@@ -388,3 +388,116 @@ export function SupplierForm({
     </Modal>
   );
 }
+
+export function InviteForm({
+  onSubmit,
+  onClose,
+  saving,
+}: {
+  onSubmit: Submit;
+  onClose: () => void;
+  saving: boolean;
+}) {
+  return (
+    <Modal
+      title="Invite someone"
+      description="They’ll get a private link that only works with the email address you enter."
+      onClose={onClose}
+    >
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Field label="Email address">
+          <Input
+            name="email"
+            type="email"
+            required
+            maxLength={160}
+            placeholder="name@example.com"
+            autoFocus
+          />
+        </Field>
+        <Field label="Role">
+          <select name="role" className={selectClass} defaultValue="cashier">
+            <option value="cashier">Cashier: sells and looks up products</option>
+            <option value="manager">Manager: also manages products, stock and suppliers</option>
+          </select>
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Submit saving={saving}>Create invite link</Submit>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+export function InviteLinkDialog({
+  link,
+  email,
+  onClose,
+}: {
+  link: string;
+  email: string;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      title="Invite link ready"
+      description={`Send this link to ${email}. It works only for that address and expires in 7 days.`}
+      onClose={onClose}
+    >
+      <div className="space-y-4">
+        <Input
+          readOnly
+          value={link}
+          onFocus={(e) => e.currentTarget.select()}
+          className="font-mono text-xs"
+        />
+        <p className="text-xs text-muted-foreground">
+          For security we can’t show this link again. If it’s lost, revoke the invite and create a
+          new one.
+        </p>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Done
+          </Button>
+          <Button type="button" onClick={() => void navigator.clipboard?.writeText(link)}>
+            Copy link
+          </Button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+export function JoinInviteDialog({
+  business,
+  role,
+  onAccept,
+  onDecline,
+  saving,
+}: {
+  business: string;
+  role: string;
+  onAccept: () => void;
+  onDecline: () => void;
+  saving: boolean;
+}) {
+  return (
+    <Modal
+      title={`Join ${business}?`}
+      description={`You’ve been invited as a ${role}.`}
+      onClose={onDecline}
+    >
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="outline" onClick={onDecline}>
+          Not now
+        </Button>
+        <Button type="button" onClick={onAccept} disabled={saving}>
+          {saving && <LoaderCircle className="animate-spin" />} Join business
+        </Button>
+      </div>
+    </Modal>
+  );
+}

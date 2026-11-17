@@ -13,9 +13,26 @@ type Props = {
   name: string;
   setName: (value: string) => void;
   busy: boolean;
-  confirmation: boolean;
+  confirmation: "verify" | "reset" | null;
+  invite?: string | null;
+  onForgot: () => void;
   onBack: () => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+};
+
+const HEADINGS: Record<AuthMode, [string, string, string]> = {
+  signin: ["Welcome back", "Sign in to see how your business is doing.", "Sign in"],
+  signup: ["Create your account", "Set up your business in a couple of minutes.", "Create account"],
+  forgot: [
+    "Reset your password",
+    "Enter your email and we’ll send you a reset link.",
+    "Send reset link",
+  ],
+  reset: [
+    "Choose a new password",
+    "Use at least 8 characters you haven’t used before.",
+    "Save new password",
+  ],
 };
 
 const points = [
@@ -70,9 +87,18 @@ export function AuthScreen(p: Props) {
               </span>
               <h2 className="text-xl font-semibold">Check your email</h2>
               <p className="mt-2 text-sm text-muted-foreground">
-                We sent a confirmation link to{" "}
-                <strong className="text-foreground">{p.email}</strong>. Confirm your address, then
-                sign in.
+                {p.confirmation === "reset" ? (
+                  <>
+                    If <strong className="text-foreground">{p.email}</strong> has an account, we
+                    sent a link to choose a new password. It expires soon, so use it right away.
+                  </>
+                ) : (
+                  <>
+                    We sent a confirmation link to{" "}
+                    <strong className="text-foreground">{p.email}</strong>. Confirm your address,
+                    then sign in.
+                  </>
+                )}
               </p>
               <Button className="mt-6 w-full" variant="outline" onClick={p.onBack}>
                 Back to sign in
@@ -80,19 +106,18 @@ export function AuthScreen(p: Props) {
             </div>
           ) : (
             <>
+              {p.invite && (
+                <div className="mb-5 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+                  {p.invite}
+                </div>
+              )}
               <p className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-primary">
                 <ShieldCheck size={14} /> Secure sign-in
               </p>
-              <h2 className="mt-2 text-2xl font-semibold tracking-tight">
-                {signup ? "Create your account" : "Welcome back"}
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {signup
-                  ? "Set up your business in a couple of minutes."
-                  : "Sign in to see how your business is doing."}
-              </p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight">{HEADINGS[p.mode][0]}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">{HEADINGS[p.mode][1]}</p>
               <form onSubmit={p.onSubmit} className="mt-6 space-y-4">
-                {signup && (
+                {p.mode === "signup" && (
                   <Labelled label="Your name">
                     <Input
                       value={p.name}
@@ -103,41 +128,78 @@ export function AuthScreen(p: Props) {
                     />
                   </Labelled>
                 )}
-                <Labelled label="Email">
-                  <Input
-                    type="email"
-                    value={p.email}
-                    onChange={(e) => p.setEmail(e.target.value)}
-                    required
-                    autoComplete="email"
-                    placeholder="you@business.co.ke"
-                  />
-                </Labelled>
-                <Labelled label="Password">
-                  <Input
-                    type="password"
-                    value={p.password}
-                    onChange={(e) => p.setPassword(e.target.value)}
-                    required
-                    minLength={8}
-                    autoComplete={signup ? "new-password" : "current-password"}
-                    placeholder="At least 8 characters"
-                  />
-                </Labelled>
+                {p.mode !== "reset" && (
+                  <Labelled label="Email">
+                    <Input
+                      type="email"
+                      value={p.email}
+                      onChange={(e) => p.setEmail(e.target.value)}
+                      required
+                      autoComplete="email"
+                      placeholder="you@business.co.ke"
+                    />
+                  </Labelled>
+                )}
+                {p.mode !== "forgot" && (
+                  <Labelled label={p.mode === "reset" ? "New password" : "Password"}>
+                    <Input
+                      type="password"
+                      value={p.password}
+                      onChange={(e) => p.setPassword(e.target.value)}
+                      required
+                      minLength={8}
+                      autoComplete={p.mode === "signin" ? "current-password" : "new-password"}
+                      placeholder="At least 8 characters"
+                    />
+                    {p.mode === "signin" && (
+                      <button
+                        type="button"
+                        className="mt-1 text-xs font-medium text-primary hover:underline"
+                        onClick={p.onForgot}
+                      >
+                        Forgot password?
+                      </button>
+                    )}
+                  </Labelled>
+                )}
                 <Button type="submit" className="h-11 w-full" disabled={p.busy}>
-                  {p.busy && <LoaderCircle className="animate-spin" />}{" "}
-                  {signup ? "Create account" : "Sign in"}
+                  {p.busy && <LoaderCircle className="animate-spin" />} {HEADINGS[p.mode][2]}
                 </Button>
               </form>
               <p className="mt-6 text-center text-sm text-muted-foreground">
-                {signup ? "Already have an account?" : "New to Kioo POS?"}{" "}
-                <button
-                  type="button"
-                  className="font-medium text-primary hover:underline"
-                  onClick={() => p.setMode(signup ? "signin" : "signup")}
-                >
-                  {signup ? "Sign in" : "Create an account"}
-                </button>
+                {p.mode === "signin" && (
+                  <>
+                    New to Kioo POS?{" "}
+                    <button
+                      type="button"
+                      className="font-medium text-primary hover:underline"
+                      onClick={() => p.setMode("signup")}
+                    >
+                      Create an account
+                    </button>
+                  </>
+                )}
+                {p.mode === "signup" && (
+                  <>
+                    Already have an account?{" "}
+                    <button
+                      type="button"
+                      className="font-medium text-primary hover:underline"
+                      onClick={() => p.setMode("signin")}
+                    >
+                      Sign in
+                    </button>
+                  </>
+                )}
+                {(p.mode === "forgot" || p.mode === "reset") && (
+                  <button
+                    type="button"
+                    className="font-medium text-primary hover:underline"
+                    onClick={p.onBack}
+                  >
+                    Back to sign in
+                  </button>
+                )}
               </p>
             </>
           )}

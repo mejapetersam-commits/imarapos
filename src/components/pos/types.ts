@@ -24,5 +24,5 @@ export type Supplier = {
   product_count: number;
 };
 export type Role = "owner" | "manager" | "cashier";
-export type AuthMode = "signin" | "signup";
-export type Page = "dashboard" | "inventory" | "suppliers";
+export type AuthMode = "signin" | "signup" | "forgot" | "reset";
+export type Page = "dashboard" | "inventory" | "suppliers" | "team";

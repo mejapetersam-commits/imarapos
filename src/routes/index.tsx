@@ -6,7 +6,15 @@ import {
   createBusiness as createBusinessFn,
   createCategory as createCategoryFn,
   createProduct as createProductFn,
+  acceptInvite as acceptInviteFn,
+  createInvite as createInviteFn,
   createSupplier as createSupplierFn,
+  loadTeam as loadTeamFn,
+  previewInvite,
+  revokeInvite as revokeInviteFn,
+  updateMember as updateMemberFn,
+  type PendingInvite,
+  type TeamMember,
   deleteSupplier as deleteSupplierFn,
   updateProduct as updateProductFn,
   updateSupplier as updateSupplierFn,
@@ -24,12 +32,16 @@ import { Dashboard } from "@/components/pos/Dashboard";
 import {
   BusinessForm,
   CategoryForm,
+  InviteForm,
+  InviteLinkDialog,
+  JoinInviteDialog,
   ProductForm,
   StockForm,
   SupplierForm,
 } from "@/components/pos/Forms";
 import { Inventory } from "@/components/pos/Inventory";
 import { Suppliers } from "@/components/pos/Suppliers";
+import { Team } from "@/components/pos/Team";
 import type {
   AuthMode,
   Business,
@@ -78,6 +90,22 @@ function Index() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierForm, setSupplierForm] = useState<Supplier | "new" | null>(null);
   const [role, setRole] = useState<Role>("cashier");
+  const [team, setTeam] = useState<{
+    members: TeamMember[];
+    invites: PendingInvite[];
+    me: string;
+  } | null>(null);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [showInviteForm, setShowInviteForm] = useState(false);
+  const [inviteLink, setInviteLink] = useState<{ link: string; email: string } | null>(null);
+  const [pendingInvite, setPendingInvite] = useState<string | null>(null);
+  const [joinInvite, setJoinInvite] = useState<{
+    business_name: string;
+    role: string;
+    email: string;
+  } | null>(null);
+  const [resetToken, setResetToken] = useState<string | null>(null);
+  const [resetSent, setResetSent] = useState(false);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
   const [showStockForm, setShowStockForm] = useState<Product | null>(null);
@@ -112,6 +140,43 @@ function Index() {
     if (activeBusiness) void loadBusinessData(activeBusiness);
   }, [activeBusiness?.id]);
 
+  useEffect(() => {
+    // Invite and password-reset links arrive as query parameters; keep them, then clean the URL.
+    const params = new URLSearchParams(window.location.search);
+    const invite = params.get("invite");
+    const reset = params.get("token");
+    try {
+      if (invite) sessionStorage.setItem("imarapos_invite", invite);
+      setPendingInvite(sessionStorage.getItem("imarapos_invite"));
+    } catch {
+      setPendingInvite(invite);
+    }
+    if (reset) {
+      setResetToken(reset);
+      setAuthMode("reset");
+    }
+    if (params.get("error"))
+      toast.error("That reset link is invalid or has expired. Request a new one.");
+    if (invite || reset || params.get("error"))
+      window.history.replaceState({}, "", window.location.pathname);
+  }, []);
+
+  useEffect(() => {
+    if (!user || !pendingInvite) return;
+    void (async () => {
+      const preview = await api((token) =>
+        previewInvite({ data: { token, inviteToken: pendingInvite } }),
+      );
+      if (preview) setJoinInvite(preview);
+      else clearInvite();
+    })();
+  }, [user?.id, pendingInvite]);
+
+  useEffect(() => {
+    if (activePage === "team" && activeBusiness && (role === "owner" || role === "manager"))
+      void loadTeamData(activeBusiness);
+  }, [activePage, activeBusiness?.id, role]);
+
   /** Calls a server function with the current session token; shows the error toast and returns null on failure. */
   async function api<T>(call: (token: string) => Promise<Result<T>>): Promise<T | null> {
     const token = await getToken();
@@ -127,7 +192,7 @@ function Index() {
     return result.data;
   }
 
-  async function loadBusinesses() {
+  async function loadBusinesses(selectId?: string) {
     setLoadError(false);
     const rows = await api((token) => listBusinesses({ data: { token } }));
     if (!rows) {
@@ -136,9 +201,10 @@ function Index() {
     }
     setBusinesses(rows);
     setActiveBusiness(
-      (current) => rows.find((business) => business.id === current?.id) ?? rows[0] ?? null,
+      (current) =>
+        rows.find((business) => business.id === (selectId ?? current?.id)) ?? rows[0] ?? null,
     );
-    if (!rows.length) setShowBusinessForm(true);
+    if (!rows.length && !hasPendingInvite()) setShowBusinessForm(true);
   }
 
   async function loadBusinessData(business: Business) {
@@ -187,7 +253,46 @@ function Index() {
     }
     setAuthBusy(true);
     setNeedsEmailConfirmation(false);
+    setResetSent(false);
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(
+        () =>
+          reject(
+            new Error(
+              "The sign-in service did not respond. Check the auth URL and trusted domains.",
+            ),
+          ),
+        20000,
+      ),
+    );
     try {
+      if (authMode === "forgot") {
+        const { error } = await Promise.race([
+          authClient.requestPasswordReset({
+            email: authEmail,
+            redirectTo: `${window.location.origin}/`,
+          }),
+          timeout,
+        ]);
+        if (error) toast.error(error.message ?? "Could not send the reset link.");
+        else setResetSent(true);
+        return;
+      }
+      if (authMode === "reset") {
+        const { error } = await Promise.race([
+          authClient.resetPassword({ newPassword: authPassword, token: resetToken ?? "" }),
+          timeout,
+        ]);
+        if (error) {
+          toast.error(error.message ?? "That reset link is invalid or has expired.");
+        } else {
+          toast.success("Password updated. Sign in with your new password.");
+          setResetToken(null);
+          setAuthPassword("");
+          setAuthMode("signin");
+        }
+        return;
+      }
       const request =
         authMode === "signup"
           ? authClient.signUp.email({
@@ -196,22 +301,16 @@ function Index() {
               name: authName.trim(),
             })
           : authClient.signIn.email({ email: authEmail, password: authPassword });
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(
-          () =>
-            reject(
-              new Error(
-                "The sign-in service did not respond. Check the auth URL and trusted domains.",
-              ),
-            ),
-          20000,
-        ),
-      );
       const { data, error } = await Promise.race([request, timeout]);
       if (error) toast.error(error.message ?? "Could not complete that request.");
-      else if (authMode === "signup" && !(data as { token?: string | null } | null)?.token)
-        setNeedsEmailConfirmation(true);
-      else toast.success(authMode === "signup" ? "Your account is ready." : "Welcome back.");
+      else if (authMode === "signup" && !(data as { token?: string | null } | null)?.token) {
+        const signedIn = await authClient.signIn.email({
+          email: authEmail,
+          password: authPassword,
+        });
+        if (signedIn.error) setNeedsEmailConfirmation(true);
+        else toast.success("Your account is ready.");
+      } else toast.success(authMode === "signup" ? "Your account is ready." : "Welcome back.");
     } catch (error) {
       console.error("Auth request failed", error);
       toast.error(error instanceof Error ? error.message : "Could not reach the sign-in service.");
@@ -423,6 +522,101 @@ function Index() {
     });
   }
 
+  function hasPendingInvite() {
+    try {
+      return Boolean(sessionStorage.getItem("imarapos_invite"));
+    } catch {
+      return false;
+    }
+  }
+
+  function clearInvite() {
+    try {
+      sessionStorage.removeItem("imarapos_invite");
+    } catch {
+      /* storage unavailable */
+    }
+    setPendingInvite(null);
+    setJoinInvite(null);
+  }
+
+  async function acceptInviteNow() {
+    const inviteToken = pendingInvite;
+    if (!inviteToken) return;
+    await guarded(async () => {
+      const businessId = await api((token) => acceptInviteFn({ data: { token, inviteToken } }));
+      clearInvite();
+      if (!businessId) return;
+      setShowBusinessForm(false);
+      toast.success("You’ve joined the business.");
+      await loadBusinesses(businessId);
+    });
+  }
+
+  async function loadTeamData(business: Business) {
+    setTeamLoading(true);
+    const result = await api((token) => loadTeamFn({ data: { token, businessId: business.id } }));
+    if (result) setTeam(result);
+    setTeamLoading(false);
+  }
+
+  async function sendInvite(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeBusiness) return;
+    const form = new FormData(event.currentTarget);
+    const email = text(form, "email").toLowerCase();
+    const inviteRole = text(form, "role") === "manager" ? "manager" : "cashier";
+    await guarded(async () => {
+      const secret = await api((token) =>
+        createInviteFn({ data: { token, businessId: activeBusiness.id, email, role: inviteRole } }),
+      );
+      if (!secret) return;
+      setShowInviteForm(false);
+      setInviteLink({ link: `${window.location.origin}/?invite=${secret}`, email });
+      await loadTeamData(activeBusiness);
+    });
+  }
+
+  async function revokeInvite(invite: PendingInvite) {
+    if (!activeBusiness || !window.confirm(`Revoke the invite for ${invite.email}?`)) return;
+    await guarded(async () => {
+      const done = await api((token) =>
+        revokeInviteFn({ data: { token, businessId: activeBusiness.id, inviteId: invite.id } }),
+      );
+      if (done) await loadTeamData(activeBusiness);
+    });
+  }
+
+  async function changeMember(member: TeamMember, nextRole: Role, active: boolean) {
+    if (!activeBusiness) return;
+    await guarded(async () => {
+      const done = await api((token) =>
+        updateMemberFn({
+          data: {
+            token,
+            businessId: activeBusiness.id,
+            userId: member.user_id,
+            role: nextRole,
+            active,
+          },
+        }),
+      );
+      if (done) toast.success("Team updated.");
+      await loadTeamData(activeBusiness);
+    });
+  }
+
+  function toggleMember(member: TeamMember) {
+    if (
+      member.active &&
+      !window.confirm(
+        `Deactivate ${member.name || member.email}? They will lose access to this business.`,
+      )
+    )
+      return;
+    void changeMember(member, member.role, !member.active);
+  }
+
   async function signOut() {
     await authClient.signOut();
     setUser(null);
@@ -434,7 +628,7 @@ function Index() {
         <LoaderCircle className="size-7 animate-spin text-muted-foreground" aria-label="Loading" />
       </div>
     );
-  if (!user)
+  if (!user || resetToken)
     return (
       <AuthScreen
         mode={authMode}
@@ -446,9 +640,20 @@ function Index() {
         name={authName}
         setName={setAuthName}
         busy={authBusy}
-        confirmation={needsEmailConfirmation}
+        confirmation={needsEmailConfirmation ? "verify" : resetSent ? "reset" : null}
+        invite={
+          pendingInvite
+            ? "You’ve been invited to join a business. Sign in or create an account with the email address the invite was sent to."
+            : null
+        }
+        onForgot={() => {
+          setAuthPassword("");
+          setAuthMode("forgot");
+        }}
         onBack={() => {
           setNeedsEmailConfirmation(false);
+          setResetSent(false);
+          setResetToken(null);
           setAuthMode("signin");
         }}
         onSubmit={handleAuthSubmit}
@@ -469,6 +674,7 @@ function Index() {
       userName={profileName}
       userEmail={user.email ?? ""}
       onSignOut={signOut}
+      canManage={canManage}
     >
       {!activeBusiness ? (
         loadError ? (
@@ -505,6 +711,18 @@ function Index() {
           canManage={canManage}
           onAddProduct={() => setShowProductForm(true)}
           onOpenInventory={() => setActivePage("inventory")}
+        />
+      ) : activePage === "team" && canManage ? (
+        <Team
+          members={team?.members ?? []}
+          invites={team?.invites ?? []}
+          me={team?.me ?? ""}
+          loading={teamLoading && !team}
+          isOwner={role === "owner"}
+          onInvite={() => setShowInviteForm(true)}
+          onRevoke={revokeInvite}
+          onChangeRole={(member, next) => void changeMember(member, next, member.active)}
+          onToggleActive={toggleMember}
         />
       ) : activePage === "suppliers" ? (
         <Suppliers
@@ -568,6 +786,29 @@ function Index() {
           saving={saving}
           onSubmit={adjustStock}
           onClose={() => setShowStockForm(null)}
+        />
+      )}
+      {showInviteForm && (
+        <InviteForm
+          saving={saving}
+          onSubmit={sendInvite}
+          onClose={() => setShowInviteForm(false)}
+        />
+      )}
+      {inviteLink && (
+        <InviteLinkDialog
+          link={inviteLink.link}
+          email={inviteLink.email}
+          onClose={() => setInviteLink(null)}
+        />
+      )}
+      {joinInvite && (
+        <JoinInviteDialog
+          business={joinInvite.business_name}
+          role={joinInvite.role}
+          saving={saving}
+          onAccept={() => void acceptInviteNow()}
+          onDecline={clearInvite}
         />
       )}
       {supplierForm && (

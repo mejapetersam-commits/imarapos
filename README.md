@@ -5,8 +5,8 @@ A multi-tenant POS and business-management app for SMEs in Kenya: inventory, sup
 **Stack:** TanStack Start (React 19, Vite, Nitro) · Neon Postgres + Neon Auth (managed Better Auth) · Tailwind 4 + shadcn/ui · Vercel.
 
 ## Status
-Done: sign-in, business setup, roles, inventory (products, categories, stock adjustments with history, edit/archive), suppliers.
-Next: staff invites, sales and checkout, customers and credit, M-Pesa, reports, PWA/offline. See `roadmap.md`.
+Done: sign-in and password reset, business setup, roles, team invites, inventory (products, categories, stock adjustments with history, edit/archive), suppliers.
+Next: sales and checkout, customers and credit, M-Pesa, reports, PWA/offline. See `roadmap.md`.
 
 ## How it works
 - The browser never talks to the database. Server functions in `src/api/functions.ts` verify the caller's Neon Auth JWT (`src/server/verify-token.ts`), then run in one transaction as the restricted `imarapos_app` role (`src/server/db.ts`).
