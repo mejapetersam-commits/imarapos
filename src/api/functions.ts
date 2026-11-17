@@ -125,7 +125,9 @@ export const loadBusinessData = createServerFn({ method: "POST" })
       );
       const role = (await db.query("SELECT app_role() AS role")).rows[0].role as Role;
       const sales = await db.query(
-        "SELECT count(*)::int AS count, COALESCE(sum(total), 0)::float8 AS revenue FROM sales WHERE status = 'completed'",
+        `SELECT (SELECT count(*)::int FROM sales WHERE status IN ('completed', 'refunded')) AS count,
+                ((SELECT COALESCE(sum(total), 0) FROM sales WHERE status IN ('completed', 'refunded'))
+                 - (SELECT COALESCE(sum(amount), 0) FROM refunds))::float8 AS revenue`,
       );
       const customers = await db.query("SELECT count(*)::int AS count FROM customers");
       return {
@@ -412,4 +414,170 @@ export const acceptInvite = createServerFn({ method: "POST" })
           ])
         ).rows[0].id as string,
     ),
+  );
+
+// ---- Sales, receipts and refunds ----------------------------------------------------------------
+
+export type SaleListRow = {
+  id: string;
+  receipt_no: string | null;
+  total: number;
+  status: string;
+  created_at: string;
+  salesperson: string | null;
+  items: number;
+};
+
+export type Receipt = {
+  business: string;
+  sale: {
+    id: string;
+    receipt_no: string | null;
+    status: string;
+    created_at: string;
+    subtotal: number;
+    discount_total: number;
+    total: number;
+    salesperson: string | null;
+  };
+  items: {
+    id: string;
+    name: string;
+    sku: string;
+    quantity: number;
+    unit_price: number;
+    discount: number;
+    line_total: number;
+    returned_quantity: number;
+  }[];
+  payment: { method: string; amount: number; tendered: number | null; change_given: number } | null;
+  refunded: number;
+};
+
+export const listSales = createServerFn({ method: "POST" })
+  .validator(z.object(inBusiness))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ANYONE, async (db) => {
+      const role = (await db.query("SELECT app_role() AS role")).rows[0].role as Role;
+      const result = await db.query(
+        `SELECT s.id, s.receipt_no, s.total::float8 AS total, s.status, s.created_at,
+                member_name(s.salesperson_id) AS salesperson,
+                (SELECT count(*)::int FROM sale_items i WHERE i.sale_id = s.id) AS items
+           FROM sales s
+          WHERE s.status <> 'draft' AND ($1::boolean OR s.salesperson_id = app_user())
+          ORDER BY s.created_at DESC LIMIT 200`,
+        [role !== "cashier"],
+      );
+      return result.rows as SaleListRow[];
+    }),
+  );
+
+export const getReceipt = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, saleId: uuid }))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ANYONE, async (db) => {
+      const role = (await db.query("SELECT app_role() AS role")).rows[0].role as Role;
+      const sale = await db.query(
+        `SELECT s.id, s.receipt_no, s.status, s.created_at, s.subtotal::float8 AS subtotal,
+                s.discount_total::float8 AS discount_total, s.total::float8 AS total,
+                member_name(s.salesperson_id) AS salesperson, (SELECT name FROM businesses WHERE id = s.business_id) AS business
+           FROM sales s WHERE s.id = $1 AND ($2::boolean OR s.salesperson_id = app_user())`,
+        [data.saleId, role !== "cashier"],
+      );
+      if (!sale.rowCount) throw notFound("Sale");
+      const items = await db.query(
+        `SELECT id, product_name AS name, product_sku AS sku, quantity::float8 AS quantity, unit_price::float8 AS unit_price,
+                discount::float8 AS discount, line_total::float8 AS line_total, returned_quantity::float8 AS returned_quantity
+           FROM sale_items WHERE sale_id = $1 ORDER BY product_name`,
+        [data.saleId],
+      );
+      const payment = await db.query(
+        "SELECT method, amount::float8 AS amount, tendered::float8 AS tendered, change_given::float8 AS change_given FROM payments WHERE sale_id = $1 AND status = 'confirmed' ORDER BY created_at LIMIT 1",
+        [data.saleId],
+      );
+      const refunded = await db.query(
+        "SELECT COALESCE(sum(amount), 0)::float8 AS amount FROM refunds WHERE sale_id = $1",
+        [data.saleId],
+      );
+      const row = sale.rows[0];
+      return {
+        business: row.business as string,
+        sale: {
+          id: row.id,
+          receipt_no: row.receipt_no,
+          status: row.status,
+          created_at: row.created_at,
+          subtotal: row.subtotal,
+          discount_total: row.discount_total,
+          total: row.total,
+          salesperson: row.salesperson,
+        },
+        items: items.rows,
+        payment: payment.rows[0] ?? null,
+        refunded: refunded.rows[0].amount as number,
+      } as Receipt;
+    }),
+  );
+
+export const createSale = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      ...inBusiness,
+      clientUuid: uuid,
+      items: z
+        .array(
+          z.object({
+            productId: uuid,
+            quantity: z.number().finite().positive(),
+            discount: z.number().finite().min(0).optional(),
+          }),
+        )
+        .min(1)
+        .max(100),
+      discount: z.number().finite().min(0),
+      cashTendered: z.number().finite().min(0),
+    }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ANYONE, async (db) => {
+      const items = data.items.map((item) => ({
+        product_id: item.productId,
+        quantity: item.quantity,
+        discount: item.discount ?? 0,
+      }));
+      const result = await db.query("SELECT complete_sale($1, $2::jsonb, $3, $4) AS id", [
+        data.clientUuid,
+        JSON.stringify(items),
+        data.discount,
+        data.cashTendered,
+      ]);
+      return result.rows[0].id as string;
+    }),
+  );
+
+export const refundSale = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      ...inBusiness,
+      saleId: uuid,
+      reason: z.string().trim().max(200),
+      items: z
+        .array(z.object({ saleItemId: uuid, quantity: z.number().finite().positive() }))
+        .min(1)
+        .max(100),
+    }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db) => {
+      const items = data.items.map((item) => ({
+        sale_item_id: item.saleItemId,
+        quantity: item.quantity,
+      }));
+      const result = await db.query("SELECT refund_sale($1, $2::jsonb, $3) AS amount", [
+        data.saleId,
+        JSON.stringify(items),
+        data.reason,
+      ]);
+      return Number(result.rows[0].amount);
+    }),
   );

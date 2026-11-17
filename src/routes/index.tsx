@@ -18,10 +18,20 @@ import {
   deleteSupplier as deleteSupplierFn,
   updateProduct as updateProductFn,
   updateSupplier as updateSupplierFn,
+  createSale as createSaleFn,
+  getReceipt as getReceiptFn,
   listBusinesses,
+  listSales as listSalesFn,
   loadBusinessData as loadBusinessDataFn,
+  refundSale as refundSaleFn,
+  type Receipt,
   type Result,
+  type SaleListRow,
 } from "@/api/functions";
+import type { CartLine } from "@/lib/cart";
+import { POS } from "@/components/pos/POS";
+import { ReceiptDialog } from "@/components/pos/ReceiptDialog";
+import { Sales } from "@/components/pos/Sales";
 import { isValidNewProduct, isValidStockAdjustment } from "@/lib/pos-rules";
 import { toast } from "sonner";
 import { LoaderCircle } from "lucide-react";
@@ -81,6 +91,9 @@ function Index() {
   const [revenue, setRevenue] = useState(0);
   const [customersCount, setCustomersCount] = useState(0);
   const [activePage, setActivePage] = useState<Page>("dashboard");
+  const [sales, setSales] = useState<SaleListRow[]>([]);
+  const [salesLoading, setSalesLoading] = useState(false);
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [showCategoryForm, setShowCategoryForm] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -176,6 +189,10 @@ function Index() {
     if (activePage === "team" && activeBusiness && (role === "owner" || role === "manager"))
       void loadTeamData(activeBusiness);
   }, [activePage, activeBusiness?.id, role]);
+
+  useEffect(() => {
+    if (activePage === "sales" && activeBusiness) void loadSales(activeBusiness);
+  }, [activePage, activeBusiness?.id]);
 
   /** Calls a server function with the current session token; shows the error toast and returns null on failure. */
   async function api<T>(call: (token: string) => Promise<Result<T>>): Promise<T | null> {
@@ -617,6 +634,70 @@ function Index() {
     void changeMember(member, member.role, !member.active);
   }
 
+  async function loadSales(business: Business) {
+    setSalesLoading(true);
+    const rows = await api((token) => listSalesFn({ data: { token, businessId: business.id } }));
+    if (rows) setSales(rows);
+    setSalesLoading(false);
+  }
+
+  async function openReceipt(saleId: string) {
+    if (!activeBusiness) return;
+    const found = await api((token) =>
+      getReceiptFn({ data: { token, businessId: activeBusiness.id, saleId } }),
+    );
+    if (found) setReceipt(found);
+  }
+
+  /** Records a cash sale. Returns true when it was saved; the cart is only cleared then, so a failure can be retried safely. */
+  async function completeSale(sale: {
+    clientUuid: string;
+    lines: CartLine[];
+    discount: number;
+    cashTendered: number;
+  }) {
+    if (!activeBusiness) return false;
+    let saved = false;
+    await guarded(async () => {
+      const saleId = await api((token) =>
+        createSaleFn({
+          data: {
+            token,
+            businessId: activeBusiness.id,
+            clientUuid: sale.clientUuid,
+            items: sale.lines.map((line) => ({
+              productId: line.productId,
+              quantity: line.quantity,
+            })),
+            discount: sale.discount,
+            cashTendered: sale.cashTendered,
+          },
+        }),
+      );
+      if (!saleId) return;
+      saved = true;
+      toast.success("Sale completed.");
+      await loadBusinessData(activeBusiness);
+      await openReceipt(saleId);
+    });
+    return saved;
+  }
+
+  async function refundReceipt(items: { saleItemId: string; quantity: number }[], reason: string) {
+    if (!activeBusiness || !receipt) return;
+    const saleId = receipt.sale.id;
+    await guarded(async () => {
+      const amount = await api((token) =>
+        refundSaleFn({ data: { token, businessId: activeBusiness.id, saleId, items, reason } }),
+      );
+      if (amount === null) return;
+      toast.success(`Refund recorded: KES ${amount.toLocaleString("en-KE")}`);
+      await loadBusinessData(activeBusiness);
+      await loadSales(activeBusiness);
+      await openReceipt(saleId);
+    });
+  }
+
   async function signOut() {
     await authClient.signOut();
     setUser(null);
@@ -712,6 +793,20 @@ function Index() {
           onAddProduct={() => setShowProductForm(true)}
           onOpenInventory={() => setActivePage("inventory")}
         />
+      ) : activePage === "pos" ? (
+        <POS
+          products={activeProducts}
+          loading={loading}
+          saving={saving}
+          onComplete={completeSale}
+        />
+      ) : activePage === "sales" ? (
+        <Sales
+          sales={sales}
+          loading={salesLoading}
+          ownOnly={role === "cashier"}
+          onOpen={(id) => void openReceipt(id)}
+        />
       ) : activePage === "team" && canManage ? (
         <Team
           members={team?.members ?? []}
@@ -778,6 +873,15 @@ function Index() {
           saving={saving}
           onSubmit={updateProduct}
           onClose={() => setEditingProduct(null)}
+        />
+      )}
+      {receipt && (
+        <ReceiptDialog
+          receipt={receipt}
+          canRefund={canManage}
+          saving={saving}
+          onRefund={refundReceipt}
+          onClose={() => setReceipt(null)}
         />
       )}
       {showStockForm && (

@@ -5,13 +5,13 @@ A multi-tenant POS and business-management app for SMEs in Kenya: inventory, sup
 **Stack:** TanStack Start (React 19, Vite, Nitro) · Neon Postgres + Neon Auth (managed Better Auth) · Tailwind 4 + shadcn/ui · Vercel.
 
 ## Status
-Done: sign-in and password reset, business setup, roles, team invites, inventory (products, categories, stock adjustments with history, edit/archive), suppliers.
-Next: sales and checkout, customers and credit, M-Pesa, reports, PWA/offline. See `roadmap.md`.
+Done: sign-in and password reset, business setup, roles, team invites, inventory (products, categories, stock adjustments with history, edit/archive), suppliers, cash sales with receipts and refunds.
+Next: customers and credit, M-Pesa, reports, PWA/offline. See `roadmap.md`.
 
 ## How it works
 - The browser never talks to the database. Server functions in `src/api/functions.ts` verify the caller's Neon Auth JWT (`src/server/verify-token.ts`), then run in one transaction as the restricted `imarapos_app` role (`src/server/db.ts`).
 - Every transaction sets `app.user_id` and `app.business_id`. Postgres row-level security uses them to isolate each business and to enforce roles (`owner`, `manager`, `cashier`), so a missed filter in code cannot leak or modify another business's data.
-- Business rules that must be atomic live in SQL functions (`create_business`, `add_product_with_stock`, `adjust_inventory`, `update_product`, `accept_invite`, `update_member`, `list_team`).
+- Business rules that must be atomic live in SQL functions (`create_business`, `complete_sale`, `refund_sale`, `add_product_with_stock`, `adjust_inventory`, `update_product`, `accept_invite`, `update_member`, `list_team`).
 
 ## Environments
 | Vercel env | Git branch | Neon branch |
