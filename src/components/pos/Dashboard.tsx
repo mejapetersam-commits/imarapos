@@ -10,6 +10,8 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatKes, formatQuantity, stockState } from "@/lib/format";
+import { daysRange, fillSeries, type SeriesPoint } from "@/lib/report";
+import { TrendChart } from "./TrendChart";
 import type { Product } from "./types";
 
 type Props = {
@@ -20,6 +22,7 @@ type Props = {
   customersCount: number;
   creditOutstanding: number;
   creditOverdue: number;
+  trend: SeriesPoint[];
   categoriesCount: number;
   loading: boolean;
   canManage: boolean;
@@ -147,11 +150,21 @@ export function Dashboard(p: Props) {
             <div className="flex items-center justify-between">
               <h2 className="font-semibold">Sales trend</h2>
             </div>
-            <div className="mt-4 flex h-48 items-center justify-center rounded-xl bg-muted/40 text-center text-sm text-muted-foreground">
-              {p.salesCount === 0
-                ? "Your sales chart will appear after your first completed sale."
-                : "Charts arrive with the reports module."}
-            </div>
+            <p className="text-xs text-muted-foreground">Revenue for the last 14 days</p>
+            {p.salesCount === 0 ? (
+              <div className="mt-4 flex h-48 items-center justify-center rounded-xl bg-muted/40 text-center text-sm text-muted-foreground">
+                Your sales chart will appear after your first completed sale.
+              </div>
+            ) : (
+              <div className="mt-3">
+                <TrendChart
+                  data={fillSeries(p.trend, daysRange(14).from, daysRange(14).to, "day")}
+                  granularity="day"
+                  showProfit={false}
+                  height={192}
+                />
+              </div>
+            )}
           </section>
           <section className="rounded-2xl border bg-card p-5 shadow-sm lg:col-span-2">
             <div className="flex items-center justify-between">

@@ -13,13 +13,14 @@ import {
   ShoppingCart,
   Truck,
   UsersRound,
+  Wallet,
   Users,
   X,
 } from "lucide-react";
 import type { Business, Page } from "./types";
 
 type NavItem = {
-  id: Page | "payments" | "reports" | "settings";
+  id: Page | "payments" | "settings";
   label: string;
   icon: typeof Boxes;
   ready: boolean;
@@ -34,7 +35,8 @@ const NAV: NavItem[] = [
   { id: "team", label: "Team", icon: UsersRound, ready: true, managersOnly: true },
   { id: "customers", label: "Customers", icon: Users, ready: true },
   { id: "payments", label: "Payments", icon: CreditCard, ready: false },
-  { id: "reports", label: "Reports", icon: BarChart3, ready: false },
+  { id: "reports", label: "Reports", icon: BarChart3, ready: true, managersOnly: true },
+  { id: "expenses", label: "Expenses", icon: Wallet, ready: true, managersOnly: true },
   { id: "settings", label: "Settings", icon: Settings2, ready: false },
 ];
 

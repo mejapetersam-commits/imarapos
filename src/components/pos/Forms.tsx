@@ -565,3 +565,72 @@ export function CustomerForm({
     </Modal>
   );
 }
+
+const EXPENSE_CATEGORIES = [
+  "Rent",
+  "Salaries",
+  "Utilities",
+  "Transport",
+  "Supplies",
+  "Marketing",
+  "Licences & fees",
+  "Repairs",
+  "Other",
+];
+
+export function ExpenseForm({
+  today,
+  onSubmit,
+  onClose,
+  saving,
+}: {
+  today: string;
+  onSubmit: Submit;
+  onClose: () => void;
+  saving: boolean;
+}) {
+  return (
+    <Modal
+      title="Add expense"
+      description="Money spent running the business, not stock purchases."
+      onClose={onClose}
+    >
+      <form onSubmit={onSubmit} className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Category">
+            <Input
+              name="category"
+              list="expense-categories"
+              required
+              maxLength={60}
+              placeholder="e.g. Rent"
+              autoFocus
+            />
+            <datalist id="expense-categories">
+              {EXPENSE_CATEGORIES.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
+          </Field>
+          <Field label="Amount (KES)">
+            <Input name="amount" type="number" min="0.01" step="0.01" required />
+          </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Date">
+            <Input name="spentOn" type="date" defaultValue={today} max={today} required />
+          </Field>
+          <Field label="Note (optional)">
+            <Input name="description" maxLength={200} placeholder="e.g. November shop rent" />
+          </Field>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Submit saving={saving}>Save expense</Submit>
+        </div>
+      </form>
+    </Modal>
+  );
+}

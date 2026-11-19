@@ -11,5 +11,5 @@
 - [x] 4. Customers: address book, purchase history, top spenders/frequent, credit limits and terms, credit sales (cash + credit split), credit ledger and statements, oldest-first repayments, overdue blocking, credit ageing, WhatsApp reminders, credit-aware refunds.
 - [ ] 4b. Opening balances for existing debtors, write-offs, customer groups/discounts, loyalty points (ideas from NexoPOS/OpenTill).
 - [ ] 5. Payments: cash, card, bank transfer, M-Pesa Daraja with reconciliation.
-- [ ] 6. Analytics and reporting.
+- [x] 6. Reports and analytics: daily/weekly/monthly sales, revenue, gross and net profit, expenses, top products with margins, salesperson performance, payment mix, stock valuation, fast/slow/dead stock, restock recommendations. Dashboard trend chart.
 - [ ] 7. Product images, PWA install and offline sales with safe sync.

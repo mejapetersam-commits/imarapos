@@ -25,4 +25,13 @@ export type Supplier = {
 };
 export type Role = "owner" | "manager" | "cashier";
 export type AuthMode = "signin" | "signup" | "forgot" | "reset";
-export type Page = "dashboard" | "pos" | "sales" | "customers" | "inventory" | "suppliers" | "team";
+export type Page =
+  | "dashboard"
+  | "pos"
+  | "sales"
+  | "customers"
+  | "reports"
+  | "expenses"
+  | "inventory"
+  | "suppliers"
+  | "team";

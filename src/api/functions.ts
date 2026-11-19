@@ -130,6 +130,14 @@ export const loadBusinessData = createServerFn({ method: "POST" })
                  - (SELECT COALESCE(sum(amount), 0) FROM refunds))::float8 AS revenue`,
       );
       const customers = await db.query("SELECT count(*)::int AS count FROM customers");
+      const trend = await db.query(
+        `SELECT to_char((created_at AT TIME ZONE 'Africa/Nairobi')::date, 'YYYY-MM-DD') AS bucket,
+                (count(*) FILTER (WHERE status = 'completed'))::int AS sales,
+                sum(total - COALESCE((SELECT sum(amount) FROM refunds r WHERE r.sale_id = sales.id), 0))::float8 AS revenue
+           FROM sales
+          WHERE status IN ('completed', 'refunded') AND created_at >= now() - interval '15 days'
+          GROUP BY 1 ORDER BY 1`,
+      );
       const credit = await db.query(
         `SELECT COALESCE((SELECT sum(balance) FROM credit_accounts), 0)::float8 AS outstanding,
                 COALESCE((SELECT sum(credit_outstanding) FROM sales WHERE credit_outstanding > 0 AND due_date < current_date), 0)::float8 AS overdue`,
@@ -144,6 +152,12 @@ export const loadBusinessData = createServerFn({ method: "POST" })
         customersCount: customers.rows[0].count as number,
         creditOutstanding: credit.rows[0].outstanding as number,
         creditOverdue: credit.rows[0].overdue as number,
+        trend: trend.rows.map((row) => ({
+          bucket: row.bucket as string,
+          sales: row.sales as number,
+          revenue: row.revenue as number,
+          profit: 0,
+        })),
       };
     }),
   );
@@ -805,4 +819,269 @@ export const recordCreditPayment = createServerFn({ method: "POST" })
         ).rows[0].balance,
       ),
     ),
+  );
+
+// ---- Reports, stock insights and expenses --------------------------------------------------------
+
+export type ReportData = {
+  totals: {
+    sales: number;
+    gross_sales: number;
+    discounts: number;
+    refunds: number;
+    revenue: number;
+    cogs: number;
+    gross_profit: number;
+    expenses: number;
+    net_profit: number;
+    avg_sale: number;
+    units: number;
+  };
+  series: { bucket: string; sales: number; revenue: number; profit: number }[];
+  products: {
+    id: string;
+    name: string;
+    sku: string;
+    units: number;
+    revenue: number;
+    profit: number;
+  }[];
+  staff: {
+    id: string | null;
+    name: string | null;
+    sales: number;
+    revenue: number;
+    avg_sale: number;
+  }[];
+  payments: { method: string; amount: number }[];
+  expensesByCategory: { category: string; amount: number }[];
+};
+
+const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const rangeFields = { from: dateString, to: dateString };
+
+/** Sales in the range, net of refunds, with cost of goods net of returns. Dates are Nairobi calendar days. */
+const NET_SALES = `
+  s AS (
+    SELECT id, total, subtotal, discount_total, salesperson_id, status,
+           (created_at AT TIME ZONE 'Africa/Nairobi')::date AS d
+      FROM sales
+     WHERE status IN ('completed', 'refunded')
+       AND created_at >= ($1::date)::timestamp AT TIME ZONE 'Africa/Nairobi'
+       AND created_at <  (($2::date) + 1)::timestamp AT TIME ZONE 'Africa/Nairobi'),
+  r AS (SELECT sale_id, sum(amount) AS amount FROM refunds WHERE sale_id IN (SELECT id FROM s) GROUP BY sale_id),
+  c AS (SELECT sale_id, sum((quantity - returned_quantity) * unit_cost) AS cogs, sum(quantity - returned_quantity) AS units
+          FROM sale_items WHERE sale_id IN (SELECT id FROM s) GROUP BY sale_id),
+  n AS (
+    SELECT s.*, COALESCE(r.amount, 0) AS refunded, COALESCE(c.cogs, 0) AS cogs, COALESCE(c.units, 0) AS units,
+           s.total - COALESCE(r.amount, 0) AS net
+      FROM s LEFT JOIN r ON r.sale_id = s.id LEFT JOIN c ON c.sale_id = s.id)`;
+
+export const getReport = createServerFn({ method: "POST" })
+  .validator(
+    z.object({ ...inBusiness, ...rangeFields, granularity: z.enum(["day", "week", "month"]) }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db) => {
+      const range = [data.from, data.to];
+      const totals = await db.query(
+        `WITH ${NET_SALES}
+         SELECT count(*) FILTER (WHERE status = 'completed')::int AS sales,
+                COALESCE(sum(subtotal), 0)::float8 AS gross_sales, COALESCE(sum(discount_total), 0)::float8 AS discounts,
+                COALESCE(sum(refunded), 0)::float8 AS refunds, COALESCE(sum(net), 0)::float8 AS revenue,
+                COALESCE(sum(cogs), 0)::float8 AS cogs, COALESCE(sum(units), 0)::float8 AS units
+           FROM n`,
+        range,
+      );
+      const series = await db.query(
+        `WITH ${NET_SALES}
+         SELECT to_char(date_trunc($3::text, d::timestamp)::date, 'YYYY-MM-DD') AS bucket,
+                (count(*) FILTER (WHERE status = 'completed'))::int AS sales,
+                sum(net)::float8 AS revenue, sum(net - cogs)::float8 AS profit
+           FROM n GROUP BY 1 ORDER BY 1`,
+        [...range, data.granularity],
+      );
+      const products = await db.query(
+        `WITH ${NET_SALES},
+         ls AS (SELECT sale_id, sum(line_total) AS line_sum FROM sale_items WHERE sale_id IN (SELECT id FROM s) GROUP BY sale_id)
+         SELECT i.product_id AS id, max(i.product_name) AS name, max(i.product_sku) AS sku,
+                sum(i.quantity - i.returned_quantity)::float8 AS units,
+                sum(CASE WHEN i.quantity = 0 OR ls.line_sum = 0 THEN 0
+                         ELSE i.line_total * (i.quantity - i.returned_quantity) / i.quantity * s.total / ls.line_sum END)::float8 AS revenue,
+                sum((i.quantity - i.returned_quantity) * i.unit_cost)::float8 AS cost
+           FROM sale_items i JOIN s ON s.id = i.sale_id JOIN ls ON ls.sale_id = i.sale_id
+          GROUP BY i.product_id HAVING sum(i.quantity - i.returned_quantity) > 0
+          ORDER BY revenue DESC LIMIT 15`,
+        range,
+      );
+      const staff = await db.query(
+        `WITH ${NET_SALES}
+         SELECT salesperson_id AS id, member_name(salesperson_id) AS name,
+                (count(*) FILTER (WHERE status = 'completed'))::int AS sales, sum(net)::float8 AS revenue
+           FROM n GROUP BY salesperson_id ORDER BY revenue DESC`,
+        range,
+      );
+      const payments = await db.query(
+        `SELECT method, sum(amount)::float8 AS amount FROM payments
+          WHERE status = 'confirmed'
+            AND created_at >= ($1::date)::timestamp AT TIME ZONE 'Africa/Nairobi'
+            AND created_at <  (($2::date) + 1)::timestamp AT TIME ZONE 'Africa/Nairobi'
+          GROUP BY method ORDER BY 2 DESC`,
+        range,
+      );
+      const expenses = await db.query(
+        "SELECT category, sum(amount)::float8 AS amount FROM expenses WHERE spent_on BETWEEN $1::date AND $2::date GROUP BY category ORDER BY 2 DESC",
+        range,
+      );
+      const t = totals.rows[0];
+      const expenseTotal = (expenses.rows as { amount: number }[]).reduce(
+        (sum, row) => sum + row.amount,
+        0,
+      );
+      const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+      const grossProfit = r2(t.revenue - t.cogs);
+      return {
+        totals: {
+          sales: t.sales as number,
+          gross_sales: t.gross_sales,
+          discounts: t.discounts,
+          refunds: t.refunds,
+          revenue: t.revenue,
+          cogs: t.cogs,
+          gross_profit: grossProfit,
+          expenses: r2(expenseTotal),
+          net_profit: r2(grossProfit - expenseTotal),
+          avg_sale: t.sales > 0 ? r2(t.revenue / t.sales) : 0,
+          units: t.units,
+        },
+        series: series.rows,
+        products: (
+          products.rows as {
+            id: string;
+            name: string;
+            sku: string;
+            units: number;
+            revenue: number;
+            cost: number;
+          }[]
+        ).map((p) => ({
+          id: p.id,
+          name: p.name,
+          sku: p.sku,
+          units: p.units,
+          revenue: r2(p.revenue),
+          profit: r2(p.revenue - p.cost),
+        })),
+        staff: (
+          staff.rows as { id: string | null; name: string | null; sales: number; revenue: number }[]
+        ).map((row) => ({
+          ...row,
+          avg_sale: row.sales > 0 ? r2(row.revenue / row.sales) : 0,
+        })),
+        payments: payments.rows,
+        expensesByCategory: expenses.rows,
+      } as ReportData;
+    }),
+  );
+
+export type StockRow = {
+  id: string;
+  name: string;
+  sku: string;
+  cost_price: number;
+  selling_price: number;
+  low_stock_threshold: number;
+  quantity: number;
+  units_30: number;
+  units_90: number;
+  age_days: number;
+};
+
+export const getStockInsights = createServerFn({ method: "POST" })
+  .validator(z.object(inBusiness))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db) => {
+      const result = await db.query(
+        `WITH sold AS (
+           SELECT i.product_id,
+                  COALESCE(sum(i.quantity - i.returned_quantity) FILTER (WHERE s.created_at >= now() - interval '30 days'), 0) AS u30,
+                  COALESCE(sum(i.quantity - i.returned_quantity) FILTER (WHERE s.created_at >= now() - interval '90 days'), 0) AS u90
+             FROM sale_items i JOIN sales s ON s.id = i.sale_id AND s.status IN ('completed', 'refunded')
+            GROUP BY i.product_id)
+         SELECT p.id, p.name, p.sku, p.cost_price::float8 AS cost_price, p.selling_price::float8 AS selling_price,
+                p.low_stock_threshold::float8 AS low_stock_threshold, COALESCE(inv.quantity_on_hand, 0)::float8 AS quantity,
+                COALESCE(sold.u30, 0)::float8 AS units_30, COALESCE(sold.u90, 0)::float8 AS units_90,
+                GREATEST(0, floor(extract(epoch FROM (now() - p.created_at)) / 86400))::int AS age_days
+           FROM products p
+           LEFT JOIN inventory inv ON inv.product_id = p.id AND inv.business_id = p.business_id
+           LEFT JOIN sold ON sold.product_id = p.id
+          WHERE p.active ORDER BY p.name`,
+      );
+      return result.rows as StockRow[];
+    }),
+  );
+
+export type ExpenseRow = {
+  id: string;
+  category: string;
+  description: string | null;
+  amount: number;
+  spent_on: string;
+  created_by_name: string | null;
+};
+
+export const listExpenses = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, ...rangeFields }))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db) => {
+      const result = await db.query(
+        `SELECT id, category, description, amount::float8 AS amount, to_char(spent_on, 'YYYY-MM-DD') AS spent_on, member_name(created_by) AS created_by_name
+           FROM expenses WHERE spent_on BETWEEN $1::date AND $2::date ORDER BY spent_on DESC, created_at DESC LIMIT 500`,
+        [data.from, data.to],
+      );
+      return result.rows as ExpenseRow[];
+    }),
+  );
+
+export const createExpense = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      ...inBusiness,
+      category: z.string().trim().min(1).max(60),
+      description: z.string().trim().max(200).nullable(),
+      amount: z.number().finite().positive().max(100_000_000),
+      spentOn: dateString,
+    }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db, userId) => {
+      const id = (
+        await db.query(
+          "INSERT INTO expenses (business_id, category, description, amount, spent_on, created_by) VALUES (app_business(), $1, $2, $3, $4::date, $5) RETURNING id",
+          [data.category, data.description, data.amount, data.spentOn, userId],
+        )
+      ).rows[0].id as string;
+      await db.query(
+        "INSERT INTO audit_logs (business_id, actor_id, action, entity, entity_id, detail) VALUES (app_business(), $1, 'expense.created', 'expense', $2, $3::jsonb)",
+        [userId, id, JSON.stringify({ category: data.category, amount: data.amount })],
+      );
+      return id;
+    }),
+  );
+
+export const deleteExpense = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, expenseId: uuid }))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db, userId) => {
+      const result = await db.query(
+        "DELETE FROM expenses WHERE id = $1 RETURNING category, amount::float8 AS amount",
+        [data.expenseId],
+      );
+      if (!result.rowCount) throw notFound("Expense");
+      await db.query(
+        "INSERT INTO audit_logs (business_id, actor_id, action, entity, entity_id, detail) VALUES (app_business(), $1, 'expense.deleted', 'expense', $2, $3::jsonb)",
+        [userId, data.expenseId, JSON.stringify(result.rows[0])],
+      );
+      return true as const;
+    }),
   );

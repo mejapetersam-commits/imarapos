@@ -18,7 +18,15 @@ import {
   deleteSupplier as deleteSupplierFn,
   updateProduct as updateProductFn,
   updateSupplier as updateSupplierFn,
+  createExpense as createExpenseFn,
   createSale as createSaleFn,
+  deleteExpense as deleteExpenseFn,
+  getReport as getReportFn,
+  getStockInsights as getStockInsightsFn,
+  listExpenses as listExpensesFn,
+  type ExpenseRow,
+  type ReportData,
+  type StockRow,
   customerStatement as customerStatementFn,
   deleteCustomer as deleteCustomerFn,
   listCustomers as listCustomersFn,
@@ -39,9 +47,12 @@ import {
   type SaleListRow,
 } from "@/api/functions";
 import type { CartLine } from "@/lib/cart";
+import { todayInNairobi, type Granularity, type SeriesPoint } from "@/lib/report";
 import { CustomerDetail } from "@/components/pos/CustomerDetail";
 import { Customers } from "@/components/pos/Customers";
-import { CustomerForm } from "@/components/pos/Forms";
+import { CustomerForm, ExpenseForm } from "@/components/pos/Forms";
+import { Expenses } from "@/components/pos/Expenses";
+import { Reports } from "@/components/pos/Reports";
 import { POS, type SaleRequest } from "@/components/pos/POS";
 import { ReceiptDialog } from "@/components/pos/ReceiptDialog";
 import { Sales } from "@/components/pos/Sales";
@@ -115,6 +126,14 @@ function Index() {
     sales: CustomerSale[];
   } | null>(null);
   const [posCustomerId, setPosCustomerId] = useState<string | null>(null);
+  const [report, setReport] = useState<ReportData | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [stockRows, setStockRows] = useState<StockRow[] | null>(null);
+  const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
+  const [expensesLoading, setExpensesLoading] = useState(false);
+  const [expenseForm, setExpenseForm] = useState(false);
+  const [trend, setTrend] = useState<SeriesPoint[]>([]);
+  const expensesRange = useRef<{ from: string; to: string } | null>(null);
   const [activePage, setActivePage] = useState<Page>("dashboard");
   const [sales, setSales] = useState<SaleListRow[]>([]);
   const [salesLoading, setSalesLoading] = useState(false);
@@ -216,6 +235,13 @@ function Index() {
   }, [activePage, activeBusiness?.id, role]);
 
   useEffect(() => {
+    setReport(null);
+    setStockRows(null);
+    setExpenses([]);
+    expensesRange.current = null;
+  }, [activeBusiness?.id]);
+
+  useEffect(() => {
     if ((activePage === "customers" || activePage === "pos") && activeBusiness)
       void loadCustomers(activeBusiness);
   }, [activePage, activeBusiness?.id]);
@@ -288,6 +314,7 @@ function Index() {
       setCustomersCount(result.customersCount);
       setCreditOutstanding(result.creditOutstanding);
       setCreditOverdue(result.creditOverdue);
+      setTrend(result.trend);
     }
     setLoading(false);
   }
@@ -842,6 +869,77 @@ function Index() {
     return saved;
   }
 
+  async function loadReport(from: string, to: string, granularity: Granularity) {
+    if (!activeBusiness) return;
+    setReportLoading(true);
+    const result = await api((token) =>
+      getReportFn({ data: { token, businessId: activeBusiness.id, from, to, granularity } }),
+    );
+    if (result) setReport(result);
+    setReportLoading(false);
+  }
+
+  async function loadStock() {
+    if (!activeBusiness) return;
+    const rows = await api((token) =>
+      getStockInsightsFn({ data: { token, businessId: activeBusiness.id } }),
+    );
+    if (rows) setStockRows(rows);
+  }
+
+  async function loadExpenses(from: string, to: string) {
+    if (!activeBusiness) return;
+    expensesRange.current = { from, to };
+    setExpensesLoading(true);
+    const rows = await api((token) =>
+      listExpensesFn({ data: { token, businessId: activeBusiness.id, from, to } }),
+    );
+    if (rows) setExpenses(rows);
+    setExpensesLoading(false);
+  }
+
+  async function saveExpense(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeBusiness) return;
+    const form = new FormData(event.currentTarget);
+    const amount = Number(form.get("amount"));
+    const category = text(form, "category");
+    const spentOn = text(form, "spentOn");
+    if (!category || !(amount > 0) || !spentOn) return;
+    await guarded(async () => {
+      const id = await api((token) =>
+        createExpenseFn({
+          data: {
+            token,
+            businessId: activeBusiness.id,
+            category,
+            amount,
+            spentOn,
+            description: optional(form, "description"),
+          },
+        }),
+      );
+      if (!id) return;
+      setExpenseForm(false);
+      toast.success("Expense recorded.");
+      if (expensesRange.current)
+        await loadExpenses(expensesRange.current.from, expensesRange.current.to);
+    });
+  }
+
+  async function removeExpense(expense: ExpenseRow) {
+    if (!activeBusiness || !window.confirm(`Delete this ${expense.category} expense?`)) return;
+    await guarded(async () => {
+      const done = await api((token) =>
+        deleteExpenseFn({ data: { token, businessId: activeBusiness.id, expenseId: expense.id } }),
+      );
+      if (!done) return;
+      toast.success("Expense deleted.");
+      if (expensesRange.current)
+        await loadExpenses(expensesRange.current.from, expensesRange.current.to);
+    });
+  }
+
   async function signOut() {
     await authClient.signOut();
     setUser(null);
@@ -933,6 +1031,7 @@ function Index() {
           customersCount={customersCount}
           creditOutstanding={creditOutstanding}
           creditOverdue={creditOverdue}
+          trend={trend}
           categoriesCount={categories.length}
           loading={loading}
           canManage={canManage}
@@ -949,6 +1048,24 @@ function Index() {
           loading={loading}
           saving={saving}
           onComplete={completeSale}
+        />
+      ) : activePage === "reports" && canManage ? (
+        <Reports
+          key={activeBusiness.id}
+          report={report}
+          stock={stockRows}
+          loading={reportLoading}
+          onLoadReport={(from, to, granularity) => void loadReport(from, to, granularity)}
+          onLoadStock={() => void loadStock()}
+        />
+      ) : activePage === "expenses" && canManage ? (
+        <Expenses
+          key={activeBusiness.id}
+          expenses={expenses}
+          loading={expensesLoading}
+          onLoad={(from, to) => void loadExpenses(from, to)}
+          onAdd={() => setExpenseForm(true)}
+          onDelete={(expense) => void removeExpense(expense)}
         />
       ) : activePage === "customers" ? (
         <Customers
@@ -1097,6 +1214,14 @@ function Index() {
           saving={saving}
           onSubmit={saveCustomer}
           onClose={() => setCustomerForm(null)}
+        />
+      )}
+      {expenseForm && (
+        <ExpenseForm
+          today={todayInNairobi()}
+          saving={saving}
+          onSubmit={saveExpense}
+          onClose={() => setExpenseForm(false)}
         />
       )}
       {supplierForm && (

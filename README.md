@@ -5,8 +5,8 @@ A multi-tenant POS and business-management app for SMEs in Kenya: inventory, sup
 **Stack:** TanStack Start (React 19, Vite, Nitro) · Neon Postgres + Neon Auth (managed Better Auth) · Tailwind 4 + shadcn/ui · Vercel.
 
 ## Status
-Done: sign-in and password reset, business setup, roles, team invites, inventory (products, categories, stock adjustments with history, edit/archive), suppliers, cash and credit sales with receipts and refunds, customers with credit accounts and statements.
-Next: M-Pesa and payments, cashier shifts, reports and analytics, PWA/offline. See `roadmap.md`.
+Done: sign-in and password reset, business setup, roles, team invites, inventory (products, categories, stock adjustments with history, edit/archive), suppliers, cash and credit sales with receipts and refunds, customers with credit accounts and statements, expenses, reports and stock analytics.
+Next: purchase orders, M-Pesa and payments, cashier shifts, product images, PWA/offline. See `roadmap.md`.
 
 ## How it works
 - The browser never talks to the database. Server functions in `src/api/functions.ts` verify the caller's Neon Auth JWT (`src/server/verify-token.ts`), then run in one transaction as the restricted `imarapos_app` role (`src/server/db.ts`).
@@ -34,6 +34,9 @@ cp .env.example .env   # fill in the dev branch values
 npm run dev
 npm run lint && npx tsc --noEmit && npx vitest run
 ```
+
+## Reports
+Reports attribute each sale to the Nairobi calendar day it was made. Revenue is net of refunds; cost of goods is net of returns; net profit subtracts recorded expenses. Reports and expenses are owner/manager only because they expose cost prices.
 
 ## Security notes
 - Never commit `.env`. Rotate database passwords if they are shared.
