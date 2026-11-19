@@ -8,7 +8,8 @@
 - [x] Password reset by email.
 - [x] 3. Sales and checkout (cash): barcode/search, discounts, printable and WhatsApp receipts, returns/refunds, retry-safe sales, stock updated atomically.
 - [ ] 3b. Split payments, voids, tax/VAT settings, cashier discount limits.
-- [ ] 4. Customers, credit limits and overdue tracking.
+- [x] 4. Customers: address book, purchase history, top spenders/frequent, credit limits and terms, credit sales (cash + credit split), credit ledger and statements, oldest-first repayments, overdue blocking, credit ageing, WhatsApp reminders, credit-aware refunds.
+- [ ] 4b. Opening balances for existing debtors, write-offs, customer groups/discounts, loyalty points (ideas from NexoPOS/OpenTill).
 - [ ] 5. Payments: cash, card, bank transfer, M-Pesa Daraja with reconciliation.
 - [ ] 6. Analytics and reporting.
 - [ ] 7. Product images, PWA install and offline sales with safe sync.

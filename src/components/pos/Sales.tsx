@@ -74,6 +74,7 @@ export function Sales({
                     <span className="block font-medium">{s.receipt_no}</span>
                     <span className="text-xs text-muted-foreground">
                       {when(s.created_at)} · {s.items} {s.items === 1 ? "item" : "items"}
+                      {s.customer ? ` · ${s.customer}` : ""}
                       {s.salesperson ? ` · ${s.salesperson}` : ""}
                     </span>
                   </span>

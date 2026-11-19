@@ -18,6 +18,8 @@ type Props = {
   revenue: number;
   salesCount: number;
   customersCount: number;
+  creditOutstanding: number;
+  creditOverdue: number;
   categoriesCount: number;
   loading: boolean;
   canManage: boolean;
@@ -57,11 +59,14 @@ export function Dashboard(p: Props) {
       tone: low.length ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700",
     },
     {
-      label: "Customers",
-      value: String(p.customersCount),
-      note: "In your address book",
+      label: "Credit owed",
+      value: formatKes(p.creditOutstanding),
+      note:
+        p.creditOverdue > 0
+          ? `${formatKes(p.creditOverdue)} overdue`
+          : `${p.customersCount} ${p.customersCount === 1 ? "customer" : "customers"}`,
       icon: Users,
-      tone: "bg-violet-100 text-violet-700",
+      tone: p.creditOverdue > 0 ? "bg-rose-100 text-rose-700" : "bg-violet-100 text-violet-700",
     },
   ];
   return (

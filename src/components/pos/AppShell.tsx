@@ -19,7 +19,7 @@ import {
 import type { Business, Page } from "./types";
 
 type NavItem = {
-  id: Page | "customers" | "payments" | "reports" | "settings";
+  id: Page | "payments" | "reports" | "settings";
   label: string;
   icon: typeof Boxes;
   ready: boolean;
@@ -32,7 +32,7 @@ const NAV: NavItem[] = [
   { id: "inventory", label: "Inventory", icon: Boxes, ready: true },
   { id: "suppliers", label: "Suppliers", icon: Truck, ready: true },
   { id: "team", label: "Team", icon: UsersRound, ready: true, managersOnly: true },
-  { id: "customers", label: "Customers", icon: Users, ready: false },
+  { id: "customers", label: "Customers", icon: Users, ready: true },
   { id: "payments", label: "Payments", icon: CreditCard, ready: false },
   { id: "reports", label: "Reports", icon: BarChart3, ready: false },
   { id: "settings", label: "Settings", icon: Settings2, ready: false },

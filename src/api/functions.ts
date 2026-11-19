@@ -130,6 +130,10 @@ export const loadBusinessData = createServerFn({ method: "POST" })
                  - (SELECT COALESCE(sum(amount), 0) FROM refunds))::float8 AS revenue`,
       );
       const customers = await db.query("SELECT count(*)::int AS count FROM customers");
+      const credit = await db.query(
+        `SELECT COALESCE((SELECT sum(balance) FROM credit_accounts), 0)::float8 AS outstanding,
+                COALESCE((SELECT sum(credit_outstanding) FROM sales WHERE credit_outstanding > 0 AND due_date < current_date), 0)::float8 AS overdue`,
+      );
       return {
         role,
         products: products.rows as ProductRow[],
@@ -138,6 +142,8 @@ export const loadBusinessData = createServerFn({ method: "POST" })
         salesCount: sales.rows[0].count as number,
         revenue: sales.rows[0].revenue as number,
         customersCount: customers.rows[0].count as number,
+        creditOutstanding: credit.rows[0].outstanding as number,
+        creditOverdue: credit.rows[0].overdue as number,
       };
     }),
   );
@@ -425,11 +431,13 @@ export type SaleListRow = {
   status: string;
   created_at: string;
   salesperson: string | null;
+  customer: string | null;
   items: number;
 };
 
 export type Receipt = {
   business: string;
+  customer: string | null;
   sale: {
     id: string;
     receipt_no: string | null;
@@ -439,6 +447,8 @@ export type Receipt = {
     discount_total: number;
     total: number;
     salesperson: string | null;
+    due_date: string | null;
+    credit_outstanding: number;
   };
   items: {
     id: string;
@@ -450,8 +460,9 @@ export type Receipt = {
     line_total: number;
     returned_quantity: number;
   }[];
-  payment: { method: string; amount: number; tendered: number | null; change_given: number } | null;
+  payments: { method: string; amount: number; tendered: number | null; change_given: number }[];
   refunded: number;
+  refunded_credit: number;
 };
 
 export const listSales = createServerFn({ method: "POST" })
@@ -462,6 +473,7 @@ export const listSales = createServerFn({ method: "POST" })
       const result = await db.query(
         `SELECT s.id, s.receipt_no, s.total::float8 AS total, s.status, s.created_at,
                 member_name(s.salesperson_id) AS salesperson,
+                (SELECT name FROM customers c WHERE c.id = s.customer_id) AS customer,
                 (SELECT count(*)::int FROM sale_items i WHERE i.sale_id = s.id) AS items
            FROM sales s
           WHERE s.status <> 'draft' AND ($1::boolean OR s.salesperson_id = app_user())
@@ -480,7 +492,10 @@ export const getReceipt = createServerFn({ method: "POST" })
       const sale = await db.query(
         `SELECT s.id, s.receipt_no, s.status, s.created_at, s.subtotal::float8 AS subtotal,
                 s.discount_total::float8 AS discount_total, s.total::float8 AS total,
-                member_name(s.salesperson_id) AS salesperson, (SELECT name FROM businesses WHERE id = s.business_id) AS business
+                to_char(s.due_date, 'YYYY-MM-DD') AS due_date, s.credit_outstanding::float8 AS credit_outstanding,
+                member_name(s.salesperson_id) AS salesperson,
+                (SELECT name FROM businesses WHERE id = s.business_id) AS business,
+                (SELECT name FROM customers c WHERE c.id = s.customer_id) AS customer
            FROM sales s WHERE s.id = $1 AND ($2::boolean OR s.salesperson_id = app_user())`,
         [data.saleId, role !== "cashier"],
       );
@@ -491,17 +506,18 @@ export const getReceipt = createServerFn({ method: "POST" })
            FROM sale_items WHERE sale_id = $1 ORDER BY product_name`,
         [data.saleId],
       );
-      const payment = await db.query(
-        "SELECT method, amount::float8 AS amount, tendered::float8 AS tendered, change_given::float8 AS change_given FROM payments WHERE sale_id = $1 AND status = 'confirmed' ORDER BY created_at LIMIT 1",
+      const payments = await db.query(
+        "SELECT method, amount::float8 AS amount, tendered::float8 AS tendered, change_given::float8 AS change_given FROM payments WHERE sale_id = $1 AND status = 'confirmed' ORDER BY created_at, method",
         [data.saleId],
       );
       const refunded = await db.query(
-        "SELECT COALESCE(sum(amount), 0)::float8 AS amount FROM refunds WHERE sale_id = $1",
+        "SELECT COALESCE(sum(amount), 0)::float8 AS amount, COALESCE(sum(credit_applied), 0)::float8 AS credit FROM refunds WHERE sale_id = $1",
         [data.saleId],
       );
       const row = sale.rows[0];
       return {
         business: row.business as string,
+        customer: row.customer as string | null,
         sale: {
           id: row.id,
           receipt_no: row.receipt_no,
@@ -511,10 +527,13 @@ export const getReceipt = createServerFn({ method: "POST" })
           discount_total: row.discount_total,
           total: row.total,
           salesperson: row.salesperson,
+          due_date: row.due_date,
+          credit_outstanding: row.credit_outstanding,
         },
         items: items.rows,
-        payment: payment.rows[0] ?? null,
+        payments: payments.rows,
         refunded: refunded.rows[0].amount as number,
+        refunded_credit: refunded.rows[0].credit as number,
       } as Receipt;
     }),
   );
@@ -536,6 +555,8 @@ export const createSale = createServerFn({ method: "POST" })
         .max(100),
       discount: z.number().finite().min(0),
       cashTendered: z.number().finite().min(0),
+      customerId: uuid.nullable(),
+      creditAmount: z.number().finite().min(0),
     }),
   )
   .handler(({ data }) =>
@@ -545,11 +566,13 @@ export const createSale = createServerFn({ method: "POST" })
         quantity: item.quantity,
         discount: item.discount ?? 0,
       }));
-      const result = await db.query("SELECT complete_sale($1, $2::jsonb, $3, $4) AS id", [
+      const result = await db.query("SELECT complete_sale($1, $2::jsonb, $3, $4, $5, $6) AS id", [
         data.clientUuid,
         JSON.stringify(items),
         data.discount,
         data.cashTendered,
+        data.customerId,
+        data.creditAmount,
       ]);
       return result.rows[0].id as string;
     }),
@@ -580,4 +603,206 @@ export const refundSale = createServerFn({ method: "POST" })
       ]);
       return Number(result.rows[0].amount);
     }),
+  );
+
+// ---- Customers & credit --------------------------------------------------------------------------
+
+export type CustomerRow = {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  notes: string | null;
+  address: string | null;
+  town: string | null;
+  total_spent: number;
+  orders: number;
+  last_purchase: string | null;
+  credit_limit: number | null;
+  terms_days: number | null;
+  balance: number;
+  overdue: number;
+};
+export type CreditSummary = {
+  outstanding: number;
+  overdue: number;
+  creditCustomers: number;
+  aging: { not_due: number; d1_30: number; d31_60: number; d61_plus: number };
+};
+export type StatementEntry = {
+  id: string;
+  kind: "sale" | "payment" | "credit_note";
+  amount: number;
+  balance_after: number;
+  method: string | null;
+  reference: string | null;
+  note: string | null;
+  created_at: string;
+  receipt_no: string | null;
+};
+export type CustomerSale = {
+  id: string;
+  receipt_no: string | null;
+  total: number;
+  status: string;
+  created_at: string;
+  credit_outstanding: number;
+  due_date: string | null;
+};
+
+const CUSTOMER_SQL = `
+  SELECT c.id, c.name, c.phone, c.email, c.notes, a.address, a.town,
+         (COALESCE(s.spent, 0) - COALESCE(r.refunded, 0))::float8 AS total_spent,
+         COALESCE(s.orders, 0)::int AS orders, s.last_purchase,
+         ca.credit_limit::float8 AS credit_limit, ca.terms_days, COALESCE(ca.balance, 0)::float8 AS balance,
+         COALESCE(o.overdue, 0)::float8 AS overdue
+    FROM customers c
+    LEFT JOIN LATERAL (SELECT address, town FROM customer_addresses WHERE customer_id = c.id ORDER BY is_primary DESC LIMIT 1) a ON true
+    LEFT JOIN (SELECT customer_id, sum(total) AS spent, count(*) AS orders, max(created_at) AS last_purchase FROM sales WHERE status IN ('completed', 'refunded') GROUP BY customer_id) s ON s.customer_id = c.id
+    LEFT JOIN (SELECT s2.customer_id, sum(rf.amount) AS refunded FROM refunds rf JOIN sales s2 ON s2.id = rf.sale_id GROUP BY s2.customer_id) r ON r.customer_id = c.id
+    LEFT JOIN credit_accounts ca ON ca.customer_id = c.id
+    LEFT JOIN (SELECT customer_id, sum(credit_outstanding) AS overdue FROM sales WHERE credit_outstanding > 0 AND due_date < current_date GROUP BY customer_id) o ON o.customer_id = c.id`;
+
+export const listCustomers = createServerFn({ method: "POST" })
+  .validator(z.object(inBusiness))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ANYONE, async (db) => {
+      const customers = await db.query(`${CUSTOMER_SQL} ORDER BY c.name`);
+      const aging = await db.query(
+        `SELECT COALESCE(sum(credit_outstanding) FILTER (WHERE due_date >= current_date), 0)::float8 AS not_due,
+                COALESCE(sum(credit_outstanding) FILTER (WHERE due_date < current_date AND due_date >= current_date - 30), 0)::float8 AS d1_30,
+                COALESCE(sum(credit_outstanding) FILTER (WHERE due_date < current_date - 30 AND due_date >= current_date - 60), 0)::float8 AS d31_60,
+                COALESCE(sum(credit_outstanding) FILTER (WHERE due_date < current_date - 60), 0)::float8 AS d61_plus
+           FROM sales WHERE credit_outstanding > 0`,
+      );
+      const rows = customers.rows as CustomerRow[];
+      const a = aging.rows[0];
+      const summary: CreditSummary = {
+        outstanding: rows.reduce((sum, c) => sum + c.balance, 0),
+        overdue: a.d1_30 + a.d31_60 + a.d61_plus,
+        creditCustomers: rows.filter((c) => (c.credit_limit ?? 0) > 0).length,
+        aging: { not_due: a.not_due, d1_30: a.d1_30, d31_60: a.d31_60, d61_plus: a.d61_plus },
+      };
+      return { customers: rows, summary };
+    }),
+  );
+
+export const customerStatement = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, customerId: uuid }))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ANYONE, async (db) => {
+      const customer = await db.query(`${CUSTOMER_SQL} WHERE c.id = $1`, [data.customerId]);
+      if (!customer.rowCount) throw notFound("Customer");
+      const entries = await db.query(
+        `SELECT t.id, t.kind, t.amount::float8 AS amount, t.balance_after::float8 AS balance_after, t.method, t.reference, t.note, t.created_at, s.receipt_no
+           FROM credit_transactions t LEFT JOIN sales s ON s.id = t.sale_id
+          WHERE t.customer_id = $1 ORDER BY t.created_at DESC, t.id LIMIT 300`,
+        [data.customerId],
+      );
+      const sales = await db.query(
+        `SELECT id, receipt_no, total::float8 AS total, status, created_at, credit_outstanding::float8 AS credit_outstanding, to_char(due_date, 'YYYY-MM-DD') AS due_date
+           FROM sales WHERE customer_id = $1 AND status <> 'draft' ORDER BY created_at DESC LIMIT 50`,
+        [data.customerId],
+      );
+      return {
+        customer: customer.rows[0] as CustomerRow,
+        entries: entries.rows as StatementEntry[],
+        sales: sales.rows as CustomerSale[],
+      };
+    }),
+  );
+
+export const saveCustomer = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      ...inBusiness,
+      customerId: uuid.nullable(),
+      name: z.string().trim().min(1).max(120),
+      phone: z.string().trim().max(40).nullable(),
+      email: z.string().trim().max(160).nullable(),
+      notes: z.string().trim().max(500).nullable(),
+      address: z.string().trim().max(300).nullable(),
+      town: z.string().trim().max(80).nullable(),
+    }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ANYONE, async (db) => {
+      let id = data.customerId;
+      if (id) {
+        const result = await db.query(
+          "UPDATE customers SET name = $2, phone = $3, email = $4, notes = $5 WHERE id = $1",
+          [id, data.name, data.phone, data.email, data.notes],
+        );
+        if (!result.rowCount) throw notFound("Customer");
+      } else {
+        id = (
+          await db.query(
+            "INSERT INTO customers (business_id, name, phone, email, notes) VALUES (app_business(), $1, $2, $3, $4) RETURNING id",
+            [data.name, data.phone, data.email, data.notes],
+          )
+        ).rows[0].id as string;
+      }
+      await db.query("DELETE FROM customer_addresses WHERE customer_id = $1 AND is_primary", [id]);
+      if (data.address)
+        await db.query(
+          "INSERT INTO customer_addresses (business_id, customer_id, address, town, is_primary) VALUES (app_business(), $1, $2, $3, true)",
+          [id, data.address, data.town],
+        );
+      return id;
+    }),
+  );
+
+export const deleteCustomer = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, customerId: uuid }))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db) => {
+      const result = await db.query("DELETE FROM customers WHERE id = $1", [data.customerId]);
+      if (!result.rowCount) throw notFound("Customer");
+      return true as const;
+    }),
+  );
+
+export const setCreditTerms = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      ...inBusiness,
+      customerId: uuid,
+      creditLimit: z.number().finite().min(0),
+      termsDays: z.number().int().min(0).max(365),
+    }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db) => {
+      await db.query("SELECT set_credit_terms($1, $2, $3)", [
+        data.customerId,
+        data.creditLimit,
+        data.termsDays,
+      ]);
+      return true as const;
+    }),
+  );
+
+export const recordCreditPayment = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      ...inBusiness,
+      customerId: uuid,
+      amount: z.number().finite().positive(),
+      reference: z.string().trim().max(120).nullable(),
+      clientUuid: uuid,
+    }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ANYONE, async (db) =>
+      Number(
+        (
+          await db.query("SELECT record_credit_payment($1, $2, $3, $4) AS balance", [
+            data.customerId,
+            data.amount,
+            data.reference,
+            data.clientUuid,
+          ])
+        ).rows[0].balance,
+      ),
+    ),
   );

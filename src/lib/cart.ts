@@ -44,12 +44,21 @@ export const cartSubtotal = (lines: CartLine[]) =>
 /** The discount can never push the total below zero. */
 export const cartTotal = (lines: CartLine[], discount: number) =>
   round2(Math.max(0, cartSubtotal(lines) - Math.max(0, discount || 0)));
-export const changeDue = (total: number, tendered: number) =>
-  round2(Math.max(0, (tendered || 0) - total));
-export const canComplete = (lines: CartLine[], discount: number, tendered: number) =>
-  lines.length > 0 &&
-  Math.max(0, discount || 0) <= cartSubtotal(lines) &&
-  (tendered || 0) >= cartTotal(lines, discount);
+/** Cash that must be collected now = the total minus whatever is put on the customer's credit account. */
+export const cashDue = (total: number, credit: number) =>
+  round2(Math.max(0, total - Math.max(0, credit || 0)));
+export const changeDue = (total: number, tendered: number, credit = 0) =>
+  round2(Math.max(0, (tendered || 0) - cashDue(total, credit)));
+export const canComplete = (lines: CartLine[], discount: number, tendered: number, credit = 0) => {
+  const total = cartTotal(lines, discount);
+  return (
+    lines.length > 0 &&
+    Math.max(0, discount || 0) <= cartSubtotal(lines) &&
+    (credit || 0) >= 0 &&
+    (credit || 0) <= total &&
+    (tendered || 0) >= cashDue(total, credit)
+  );
+};
 
 /** Cash buttons: the exact total plus the next few common notes above it. */
 export function quickCashOptions(total: number): number[] {

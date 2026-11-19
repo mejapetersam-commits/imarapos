@@ -501,3 +501,67 @@ export function JoinInviteDialog({
     </Modal>
   );
 }
+
+export function CustomerForm({
+  customer,
+  onSubmit,
+  onClose,
+  saving,
+}: {
+  customer: {
+    name: string;
+    phone: string | null;
+    email: string | null;
+    address: string | null;
+    town: string | null;
+    notes: string | null;
+  } | null;
+  onSubmit: Submit;
+  onClose: () => void;
+  saving: boolean;
+}) {
+  return (
+    <Modal
+      title={customer ? "Edit customer" : "Add customer"}
+      description="Contact details help with receipts, reminders and delivery."
+      onClose={onClose}
+    >
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Field label="Full name">
+          <Input name="name" required maxLength={120} defaultValue={customer?.name} autoFocus />
+        </Field>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Phone" hint="Used for WhatsApp reminders.">
+            <Input
+              name="phone"
+              type="tel"
+              maxLength={40}
+              defaultValue={customer?.phone ?? ""}
+              placeholder="0712 345 678"
+            />
+          </Field>
+          <Field label="Email">
+            <Input name="email" type="email" maxLength={160} defaultValue={customer?.email ?? ""} />
+          </Field>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Address">
+            <Input name="address" maxLength={300} defaultValue={customer?.address ?? ""} />
+          </Field>
+          <Field label="Town">
+            <Input name="town" maxLength={80} defaultValue={customer?.town ?? ""} />
+          </Field>
+        </div>
+        <Field label="Notes (optional)">
+          <Input name="notes" maxLength={500} defaultValue={customer?.notes ?? ""} />
+        </Field>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Submit saving={saving}>{customer ? "Save changes" : "Add customer"}</Submit>
+        </div>
+      </form>
+    </Modal>
+  );
+}

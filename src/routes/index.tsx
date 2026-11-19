@@ -19,6 +19,16 @@ import {
   updateProduct as updateProductFn,
   updateSupplier as updateSupplierFn,
   createSale as createSaleFn,
+  customerStatement as customerStatementFn,
+  deleteCustomer as deleteCustomerFn,
+  listCustomers as listCustomersFn,
+  recordCreditPayment as recordCreditPaymentFn,
+  saveCustomer as saveCustomerFn,
+  setCreditTerms as setCreditTermsFn,
+  type CreditSummary,
+  type CustomerRow,
+  type CustomerSale,
+  type StatementEntry,
   getReceipt as getReceiptFn,
   listBusinesses,
   listSales as listSalesFn,
@@ -29,7 +39,10 @@ import {
   type SaleListRow,
 } from "@/api/functions";
 import type { CartLine } from "@/lib/cart";
-import { POS } from "@/components/pos/POS";
+import { CustomerDetail } from "@/components/pos/CustomerDetail";
+import { Customers } from "@/components/pos/Customers";
+import { CustomerForm } from "@/components/pos/Forms";
+import { POS, type SaleRequest } from "@/components/pos/POS";
 import { ReceiptDialog } from "@/components/pos/ReceiptDialog";
 import { Sales } from "@/components/pos/Sales";
 import { isValidNewProduct, isValidStockAdjustment } from "@/lib/pos-rules";
@@ -90,6 +103,18 @@ function Index() {
   const [salesCount, setSalesCount] = useState(0);
   const [revenue, setRevenue] = useState(0);
   const [customersCount, setCustomersCount] = useState(0);
+  const [creditOutstanding, setCreditOutstanding] = useState(0);
+  const [creditOverdue, setCreditOverdue] = useState(0);
+  const [customers, setCustomers] = useState<CustomerRow[]>([]);
+  const [creditSummary, setCreditSummary] = useState<CreditSummary | null>(null);
+  const [customersLoading, setCustomersLoading] = useState(false);
+  const [customerForm, setCustomerForm] = useState<CustomerRow | "new" | null>(null);
+  const [customerDetail, setCustomerDetail] = useState<{
+    customer: CustomerRow;
+    entries: StatementEntry[];
+    sales: CustomerSale[];
+  } | null>(null);
+  const [posCustomerId, setPosCustomerId] = useState<string | null>(null);
   const [activePage, setActivePage] = useState<Page>("dashboard");
   const [sales, setSales] = useState<SaleListRow[]>([]);
   const [salesLoading, setSalesLoading] = useState(false);
@@ -191,6 +216,11 @@ function Index() {
   }, [activePage, activeBusiness?.id, role]);
 
   useEffect(() => {
+    if ((activePage === "customers" || activePage === "pos") && activeBusiness)
+      void loadCustomers(activeBusiness);
+  }, [activePage, activeBusiness?.id]);
+
+  useEffect(() => {
     if (activePage === "sales" && activeBusiness) void loadSales(activeBusiness);
   }, [activePage, activeBusiness?.id]);
 
@@ -256,6 +286,8 @@ function Index() {
       setSalesCount(result.salesCount);
       setRevenue(result.revenue);
       setCustomersCount(result.customersCount);
+      setCreditOutstanding(result.creditOutstanding);
+      setCreditOverdue(result.creditOverdue);
     }
     setLoading(false);
   }
@@ -649,13 +681,8 @@ function Index() {
     if (found) setReceipt(found);
   }
 
-  /** Records a cash sale. Returns true when it was saved; the cart is only cleared then, so a failure can be retried safely. */
-  async function completeSale(sale: {
-    clientUuid: string;
-    lines: CartLine[];
-    discount: number;
-    cashTendered: number;
-  }) {
+  /** Records a sale (cash, credit or both). Returns true when it was saved; the cart is only cleared then, so a failure can be retried safely. */
+  async function completeSale(sale: SaleRequest) {
     if (!activeBusiness) return false;
     let saved = false;
     await guarded(async () => {
@@ -671,6 +698,8 @@ function Index() {
             })),
             discount: sale.discount,
             cashTendered: sale.cashTendered,
+            customerId: sale.customerId,
+            creditAmount: sale.creditAmount,
           },
         }),
       );
@@ -678,6 +707,7 @@ function Index() {
       saved = true;
       toast.success("Sale completed.");
       await loadBusinessData(activeBusiness);
+      await loadCustomers(activeBusiness);
       await openReceipt(saleId);
     });
     return saved;
@@ -694,8 +724,122 @@ function Index() {
       toast.success(`Refund recorded: KES ${amount.toLocaleString("en-KE")}`);
       await loadBusinessData(activeBusiness);
       await loadSales(activeBusiness);
+      await loadCustomers(activeBusiness);
+      if (customerDetail) await openCustomer(customerDetail.customer.id);
       await openReceipt(saleId);
     });
+  }
+
+  async function loadCustomers(business: Business) {
+    setCustomersLoading(true);
+    const result = await api((token) =>
+      listCustomersFn({ data: { token, businessId: business.id } }),
+    );
+    if (result) {
+      setCustomers(result.customers);
+      setCreditSummary(result.summary);
+    }
+    setCustomersLoading(false);
+  }
+
+  async function openCustomer(id: string) {
+    if (!activeBusiness) return;
+    const result = await api((token) =>
+      customerStatementFn({ data: { token, businessId: activeBusiness.id, customerId: id } }),
+    );
+    if (result) setCustomerDetail(result);
+  }
+
+  async function saveCustomer(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeBusiness || !customerForm) return;
+    const form = new FormData(event.currentTarget);
+    const fields = {
+      name: text(form, "name"),
+      phone: optional(form, "phone"),
+      email: optional(form, "email"),
+      address: optional(form, "address"),
+      town: optional(form, "town"),
+      notes: optional(form, "notes"),
+    };
+    if (!fields.name) return;
+    const existing = customerForm === "new" ? null : customerForm;
+    await guarded(async () => {
+      const id = await api((token) =>
+        saveCustomerFn({
+          data: {
+            token,
+            businessId: activeBusiness.id,
+            customerId: existing?.id ?? null,
+            ...fields,
+          },
+        }),
+      );
+      if (!id) return;
+      setCustomerForm(null);
+      toast.success(existing ? "Customer updated." : "Customer added.");
+      await loadCustomers(activeBusiness);
+      if (!existing && activePage === "pos") setPosCustomerId(id);
+      if (existing && customerDetail) await openCustomer(existing.id);
+    });
+  }
+
+  async function removeCustomer(customer: CustomerRow) {
+    if (!activeBusiness || !window.confirm(`Delete ${customer.name}? This cannot be undone.`))
+      return;
+    await guarded(async () => {
+      const done = await api((token) =>
+        deleteCustomerFn({
+          data: { token, businessId: activeBusiness.id, customerId: customer.id },
+        }),
+      );
+      if (!done) return;
+      setCustomerDetail(null);
+      toast.success("Customer deleted.");
+      await loadCustomers(activeBusiness);
+    });
+  }
+
+  async function saveCreditTerms(customerId: string, creditLimit: number, termsDays: number) {
+    if (!activeBusiness) return false;
+    let saved = false;
+    await guarded(async () => {
+      const done = await api((token) =>
+        setCreditTermsFn({
+          data: { token, businessId: activeBusiness.id, customerId, creditLimit, termsDays },
+        }),
+      );
+      if (!done) return;
+      saved = true;
+      toast.success("Credit terms saved.");
+      await loadCustomers(activeBusiness);
+      await openCustomer(customerId);
+    });
+    return saved;
+  }
+
+  async function payCredit(
+    customerId: string,
+    amount: number,
+    reference: string | null,
+    clientUuid: string,
+  ) {
+    if (!activeBusiness) return false;
+    let saved = false;
+    await guarded(async () => {
+      const balance = await api((token) =>
+        recordCreditPaymentFn({
+          data: { token, businessId: activeBusiness.id, customerId, amount, reference, clientUuid },
+        }),
+      );
+      if (balance === null) return;
+      saved = true;
+      toast.success(`Payment recorded. Balance now KES ${balance.toLocaleString("en-KE")}.`);
+      await loadCustomers(activeBusiness);
+      await loadBusinessData(activeBusiness);
+      await openCustomer(customerId);
+    });
+    return saved;
   }
 
   async function signOut() {
@@ -787,6 +931,8 @@ function Index() {
           revenue={revenue}
           salesCount={salesCount}
           customersCount={customersCount}
+          creditOutstanding={creditOutstanding}
+          creditOverdue={creditOverdue}
           categoriesCount={categories.length}
           loading={loading}
           canManage={canManage}
@@ -796,9 +942,21 @@ function Index() {
       ) : activePage === "pos" ? (
         <POS
           products={activeProducts}
+          customers={customers}
+          customerId={posCustomerId}
+          onCustomerChange={setPosCustomerId}
+          onQuickAddCustomer={() => setCustomerForm("new")}
           loading={loading}
           saving={saving}
           onComplete={completeSale}
+        />
+      ) : activePage === "customers" ? (
+        <Customers
+          customers={customers}
+          summary={creditSummary}
+          loading={customersLoading}
+          onAdd={() => setCustomerForm("new")}
+          onOpen={(customer) => void openCustomer(customer.id)}
         />
       ) : activePage === "sales" ? (
         <Sales
@@ -913,6 +1071,32 @@ function Index() {
           saving={saving}
           onAccept={() => void acceptInviteNow()}
           onDecline={clearInvite}
+        />
+      )}
+      {customerDetail && activeBusiness && (
+        <CustomerDetail
+          business={activeBusiness.name}
+          customer={customerDetail.customer}
+          entries={customerDetail.entries}
+          sales={customerDetail.sales}
+          canManage={canManage}
+          saving={saving}
+          onClose={() => setCustomerDetail(null)}
+          onEdit={() => setCustomerForm(customerDetail.customer)}
+          onDelete={() => void removeCustomer(customerDetail.customer)}
+          onOpenSale={(id) => void openReceipt(id)}
+          onSaveTerms={(limit, days) => saveCreditTerms(customerDetail.customer.id, limit, days)}
+          onPay={(amount, reference, clientUuid) =>
+            payCredit(customerDetail.customer.id, amount, reference, clientUuid)
+          }
+        />
+      )}
+      {customerForm && (
+        <CustomerForm
+          customer={customerForm === "new" ? null : customerForm}
+          saving={saving}
+          onSubmit={saveCustomer}
+          onClose={() => setCustomerForm(null)}
         />
       )}
       {supplierForm && (

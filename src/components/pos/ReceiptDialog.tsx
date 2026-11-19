@@ -30,6 +30,9 @@ export function receiptText(r: Receipt): string {
     "",
     r.sale.discount_total > 0 ? `Discount: ${formatKes(r.sale.discount_total)}` : "",
     `TOTAL: ${formatKes(r.sale.total)}`,
+    r.sale.credit_outstanding > 0
+      ? `Balance due${r.sale.due_date ? ` by ${r.sale.due_date}` : ""}: ${formatKes(r.sale.credit_outstanding)}`
+      : "",
     "",
     "Thank you for shopping with us.",
   ]
@@ -103,6 +106,7 @@ export function ReceiptDialog({ receipt: r, canRefund, saving, onRefund, onClose
               <p className="text-base font-bold">{r.business}</p>
               <p>Receipt {r.sale.receipt_no}</p>
               <p>{when(r.sale.created_at)}</p>
+              {r.customer && <p>Customer: {r.customer}</p>}
               {r.sale.salesperson && <p>Served by {r.sale.salesperson}</p>}
               {r.sale.status !== "completed" && (
                 <p className="mt-1 font-bold uppercase">{r.sale.status}</p>
@@ -139,23 +143,44 @@ export function ReceiptDialog({ receipt: r, canRefund, saving, onRefund, onClose
               <span>TOTAL</span>
               <span>{formatKes(r.sale.total)}</span>
             </div>
-            {r.payment && (
-              <>
+            {r.payments.map((payment, index) => (
+              <div key={index}>
                 <div className="flex justify-between">
-                  <span>{r.payment.method === "cash" ? "Cash" : r.payment.method}</span>
-                  <span>{formatKes(r.payment.tendered ?? r.payment.amount)}</span>
+                  <span>
+                    {payment.method === "cash"
+                      ? "Cash"
+                      : payment.method === "credit"
+                        ? "On credit"
+                        : payment.method}
+                  </span>
+                  <span>
+                    {formatKes(
+                      payment.method === "cash"
+                        ? (payment.tendered ?? payment.amount)
+                        : payment.amount,
+                    )}
+                  </span>
                 </div>
-                {r.payment.change_given > 0 && (
+                {payment.change_given > 0 && (
                   <div className="flex justify-between">
                     <span>Change</span>
-                    <span>{formatKes(r.payment.change_given)}</span>
+                    <span>{formatKes(payment.change_given)}</span>
                   </div>
                 )}
-              </>
+              </div>
+            ))}
+            {r.sale.credit_outstanding > 0 && (
+              <div className="mt-1 flex justify-between font-bold">
+                <span>Balance due{r.sale.due_date ? ` by ${r.sale.due_date}` : ""}</span>
+                <span>{formatKes(r.sale.credit_outstanding)}</span>
+              </div>
             )}
             {r.refunded > 0 && (
               <div className="mt-1 flex justify-between font-bold">
-                <span>Refunded</span>
+                <span>
+                  Refunded
+                  {r.refunded_credit > 0 ? ` (${formatKes(r.refunded_credit)} off balance)` : ""}
+                </span>
                 <span>-{formatKes(r.refunded)}</span>
               </div>
             )}
