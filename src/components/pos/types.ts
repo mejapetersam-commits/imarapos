@@ -7,7 +7,7 @@ export type Product = {
   barcode: string | null;
   category_id: string | null;
   supplier_id: string | null;
-  cost_price: number;
+  cost_price: number | null;
   selling_price: number;
   low_stock_threshold: number;
   active: boolean;
@@ -34,4 +34,5 @@ export type Page =
   | "expenses"
   | "inventory"
   | "suppliers"
+  | "purchases"
   | "team";

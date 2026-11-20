@@ -164,3 +164,9 @@
   .receipt-print, .receipt-print * { visibility: visible !important; }
   .receipt-print { position: fixed; left: 0; top: 0; width: 80mm; max-width: 80mm; border: 0 !important; box-shadow: none !important; }
 }
+
+/* Print only a document such as a purchase order (full page width) */
+@media print {
+  .doc-print, .doc-print * { visibility: visible !important; }
+  .doc-print { position: fixed; left: 0; top: 0; width: 100%; border: 0 !important; box-shadow: none !important; }
+}

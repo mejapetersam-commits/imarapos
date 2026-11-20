@@ -14,7 +14,7 @@ export type StockInput = {
 export type Velocity = "fast" | "normal" | "slow" | "dead" | "new";
 export type Urgency = "out" | "low" | "soon";
 
-export type StockInsight = StockInput & {
+export type Computed = {
   velocity: Velocity;
   daily_rate: number;
   days_of_cover: number | null;
@@ -34,7 +34,9 @@ const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
  * - fast: in the top fifth of sellers by 30-day units (needs at least 5 selling products to be meaningful)
  * - new: no sales yet but listed for under 90 days
  */
-export function analyseStock(products: StockInput[]): StockInsight[] {
+export type StockInsight = StockInput & Computed;
+
+export function analyseStock<T extends StockInput>(products: T[]): (T & Computed)[] {
   const sellers = products
     .filter((p) => p.units_30 > 0)
     .map((p) => p.units_30)
@@ -54,7 +56,7 @@ export function analyseStock(products: StockInput[]): StockInsight[] {
     else velocity = "slow";
 
     const cover = rate > 0 ? p.quantity / rate : null;
-    let reorder: StockInsight["reorder"] = null;
+    let reorder: Computed["reorder"] = null;
     if (p.quantity <= 0 && (p.units_90 > 0 || p.low_stock_threshold > 0)) {
       reorder = {
         urgency: "out",

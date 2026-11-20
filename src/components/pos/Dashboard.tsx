@@ -32,7 +32,9 @@ type Props = {
 
 export function Dashboard(p: Props) {
   const stockValue = p.products.reduce(
-    (sum, x) => sum + (x.inventory?.quantity_on_hand ?? 0) * x.cost_price,
+    (sum, x) =>
+      sum +
+      (x.inventory?.quantity_on_hand ?? 0) * (p.canManage ? (x.cost_price ?? 0) : x.selling_price),
     0,
   );
   const low = p.products.filter(
@@ -48,7 +50,7 @@ export function Dashboard(p: Props) {
       tone: "bg-emerald-100 text-emerald-700",
     },
     {
-      label: "Stock value (at cost)",
+      label: p.canManage ? "Stock value (at cost)" : "Stock value (at selling price)",
       value: formatKes(stockValue),
       note: `${p.products.length} ${p.products.length === 1 ? "product" : "products"}`,
       icon: Boxes,

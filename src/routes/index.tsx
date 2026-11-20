@@ -19,7 +19,15 @@ import {
   updateProduct as updateProductFn,
   updateSupplier as updateSupplierFn,
   createExpense as createExpenseFn,
+  createPurchaseOrder as createPurchaseOrderFn,
   createSale as createSaleFn,
+  getPurchaseOrder as getPurchaseOrderFn,
+  listPurchaseOrders as listPurchaseOrdersFn,
+  receivePurchaseOrder as receivePurchaseOrderFn,
+  setPurchaseOrderStatus as setPurchaseOrderStatusFn,
+  updatePurchaseOrder as updatePurchaseOrderFn,
+  type PurchaseOrderDetail as PurchaseOrderDetailData,
+  type PurchaseOrderRow,
   deleteExpense as deleteExpenseFn,
   getReport as getReportFn,
   getStockInsights as getStockInsightsFn,
@@ -47,11 +55,16 @@ import {
   type SaleListRow,
 } from "@/api/functions";
 import type { CartLine } from "@/lib/cart";
+import { suggestedLines } from "@/lib/po";
+import { analyseStock } from "@/lib/stock-insights";
 import { todayInNairobi, type Granularity, type SeriesPoint } from "@/lib/report";
 import { CustomerDetail } from "@/components/pos/CustomerDetail";
 import { Customers } from "@/components/pos/Customers";
 import { CustomerForm, ExpenseForm } from "@/components/pos/Forms";
 import { Expenses } from "@/components/pos/Expenses";
+import { PurchaseOrderDetail } from "@/components/pos/PurchaseOrderDetail";
+import { PurchaseOrderForm, type PoPayload } from "@/components/pos/PurchaseOrderForm";
+import { PurchaseOrders } from "@/components/pos/PurchaseOrders";
 import { Reports } from "@/components/pos/Reports";
 import { POS, type SaleRequest } from "@/components/pos/POS";
 import { ReceiptDialog } from "@/components/pos/ReceiptDialog";
@@ -133,6 +146,12 @@ function Index() {
   const [expensesLoading, setExpensesLoading] = useState(false);
   const [expenseForm, setExpenseForm] = useState(false);
   const [trend, setTrend] = useState<SeriesPoint[]>([]);
+  const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderRow[]>([]);
+  const [poLoading, setPoLoading] = useState(false);
+  const [poDetail, setPoDetail] = useState<PurchaseOrderDetailData | null>(null);
+  const [poForm, setPoForm] = useState<
+    "new" | (PoPayload & { id: string; poNumber: string }) | null
+  >(null);
   const expensesRange = useRef<{ from: string; to: string } | null>(null);
   const [activePage, setActivePage] = useState<Page>("dashboard");
   const [sales, setSales] = useState<SaleListRow[]>([]);
@@ -237,9 +256,17 @@ function Index() {
   useEffect(() => {
     setReport(null);
     setStockRows(null);
+    setPurchaseOrders([]);
     setExpenses([]);
     expensesRange.current = null;
   }, [activeBusiness?.id]);
+
+  useEffect(() => {
+    if (activePage === "purchases" && activeBusiness && (role === "owner" || role === "manager")) {
+      void loadPurchaseOrders(activeBusiness);
+      if (!stockRows) void loadStock();
+    }
+  }, [activePage, activeBusiness?.id, role]);
 
   useEffect(() => {
     if ((activePage === "customers" || activePage === "pos") && activeBusiness)
@@ -940,6 +967,90 @@ function Index() {
     });
   }
 
+  async function loadPurchaseOrders(business: Business) {
+    setPoLoading(true);
+    const rows = await api((token) =>
+      listPurchaseOrdersFn({ data: { token, businessId: business.id } }),
+    );
+    if (rows) setPurchaseOrders(rows);
+    setPoLoading(false);
+  }
+
+  async function openPurchaseOrder(poId: string) {
+    if (!activeBusiness) return;
+    const found = await api((token) =>
+      getPurchaseOrderFn({ data: { token, businessId: activeBusiness.id, poId } }),
+    );
+    if (found) setPoDetail(found);
+  }
+
+  async function savePurchaseOrder(payload: PoPayload, markOrdered: boolean) {
+    if (!activeBusiness || !poForm) return;
+    const editing = poForm === "new" ? null : poForm;
+    await guarded(async () => {
+      const result = editing
+        ? await api((token) =>
+            updatePurchaseOrderFn({
+              data: { token, businessId: activeBusiness.id, poId: editing.id, ...payload },
+            }),
+          )
+        : await api((token) =>
+            createPurchaseOrderFn({
+              data: { token, businessId: activeBusiness.id, ...payload, markOrdered },
+            }),
+          );
+      if (!result) return;
+      setPoForm(null);
+      toast.success(
+        editing
+          ? "Order updated."
+          : markOrdered
+            ? "Order created and marked as ordered."
+            : "Draft order saved.",
+      );
+      await loadPurchaseOrders(activeBusiness);
+      if (editing) await openPurchaseOrder(editing.id);
+    });
+  }
+
+  async function changePoStatus(status: "ordered" | "cancelled") {
+    if (!activeBusiness || !poDetail) return;
+    if (status === "cancelled" && !window.confirm(`Cancel ${poDetail.order.po_number}?`)) return;
+    const poId = poDetail.order.id;
+    await guarded(async () => {
+      const done = await api((token) =>
+        setPurchaseOrderStatusFn({ data: { token, businessId: activeBusiness.id, poId, status } }),
+      );
+      if (!done) return;
+      toast.success(status === "ordered" ? "Marked as ordered." : "Order cancelled.");
+      await loadPurchaseOrders(activeBusiness);
+      if (status === "cancelled") setPoDetail(null);
+      else await openPurchaseOrder(poId);
+    });
+  }
+
+  async function receivePo(items: { itemId: string; quantity: number }[], note: string | null) {
+    if (!activeBusiness || !poDetail) return;
+    const poId = poDetail.order.id;
+    await guarded(async () => {
+      const status = await api((token) =>
+        receivePurchaseOrderFn({
+          data: { token, businessId: activeBusiness.id, poId, items, note },
+        }),
+      );
+      if (!status) return;
+      toast.success(
+        status === "received"
+          ? "Order fully received. Stock updated."
+          : "Stock added. The rest is still on order.",
+      );
+      setStockRows(null);
+      await loadBusinessData(activeBusiness);
+      await loadPurchaseOrders(activeBusiness);
+      await openPurchaseOrder(poId);
+    });
+  }
+
   async function signOut() {
     await authClient.signOut();
     setUser(null);
@@ -984,6 +1095,7 @@ function Index() {
     );
 
   const canManage = role === "owner" || role === "manager";
+  const insights = analyseStock(stockRows ?? []);
   const activeProducts = products.filter((product) => product.active);
 
   return (
@@ -1048,6 +1160,14 @@ function Index() {
           loading={loading}
           saving={saving}
           onComplete={completeSale}
+        />
+      ) : activePage === "purchases" && canManage ? (
+        <PurchaseOrders
+          orders={purchaseOrders}
+          loading={poLoading}
+          needsRestock={insights.filter((r) => r.reorder).length}
+          onNew={() => setPoForm("new")}
+          onOpen={(order) => void openPurchaseOrder(order.id)}
         />
       ) : activePage === "reports" && canManage ? (
         <Reports
@@ -1214,6 +1334,40 @@ function Index() {
           saving={saving}
           onSubmit={saveCustomer}
           onClose={() => setCustomerForm(null)}
+        />
+      )}
+      {poDetail && !poForm && (
+        <PurchaseOrderDetail
+          detail={poDetail}
+          saving={saving}
+          onClose={() => setPoDetail(null)}
+          onEdit={() =>
+            setPoForm({
+              id: poDetail.order.id,
+              poNumber: poDetail.order.po_number,
+              supplierId: poDetail.order.supplier_id,
+              items: poDetail.items.map((i) => ({
+                productId: i.product_id,
+                quantity: i.quantity,
+                unitCost: i.unit_cost,
+              })),
+              expectedDate: poDetail.order.expected_date,
+              notes: poDetail.order.notes,
+            })
+          }
+          onStatus={(status) => void changePoStatus(status)}
+          onReceive={(items, note) => void receivePo(items, note)}
+        />
+      )}
+      {poForm && (
+        <PurchaseOrderForm
+          suppliers={suppliers}
+          products={products}
+          suggestionsFor={(supplierId) => suggestedLines(supplierId, insights)}
+          initial={poForm === "new" ? null : poForm}
+          saving={saving}
+          onSubmit={(payload, markOrdered) => void savePurchaseOrder(payload, markOrdered)}
+          onClose={() => setPoForm(null)}
         />
       )}
       {expenseForm && (

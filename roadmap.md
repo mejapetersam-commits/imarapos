@@ -3,7 +3,7 @@
 - [x] 1. Authentication (Neon Auth), roles, multi-business data model and RLS.
 - [x] 2. Inventory: products, categories, stock adjustments and history, edit/archive.
 - [x] 2. Suppliers (list, create, edit, delete, link to products).
-- [ ] 2. Purchase orders and receiving stock.
+- [x] 2. Purchase orders and receiving stock: numbered orders, draft/ordered/received/cancelled, partial receipts, weighted-average cost, restock suggestions per supplier, WhatsApp/print to supplier.
 - [x] Staff invites (email-bound, 7-day, single-use links) and team management (roles, deactivate).
 - [x] Password reset by email.
 - [x] 3. Sales and checkout (cash): barcode/search, discounts, printable and WhatsApp receipts, returns/refunds, retry-safe sales, stock updated atomically.

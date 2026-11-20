@@ -126,7 +126,7 @@ export function Inventory(p: Props) {
                 <tr>
                   <th className="px-5 py-3 font-medium">Product</th>
                   <th className="px-3 py-3 font-medium">Category</th>
-                  <th className="px-3 py-3 text-right font-medium">Cost</th>
+                  {p.canManage && <th className="px-3 py-3 text-right font-medium">Cost</th>}
                   <th className="px-3 py-3 text-right font-medium">Price</th>
                   <th className="px-3 py-3 text-right font-medium">In stock</th>
                   <th className="px-3 py-3 font-medium">Status</th>
@@ -149,9 +149,11 @@ export function Inventory(p: Props) {
                         </span>
                       </td>
                       <td className="px-3 py-3.5 text-muted-foreground">{x.category}</td>
-                      <td className="px-3 py-3.5 text-right tabular-nums text-muted-foreground">
-                        {formatKes(x.cost_price)}
-                      </td>
+                      {p.canManage && (
+                        <td className="px-3 py-3.5 text-right tabular-nums text-muted-foreground">
+                          {formatKes(x.cost_price ?? 0)}
+                        </td>
+                      )}
                       <td className="px-3 py-3.5 text-right font-medium tabular-nums">
                         {formatKes(x.selling_price)}
                       </td>

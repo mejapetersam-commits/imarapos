@@ -91,7 +91,7 @@ export type ProductRow = {
   barcode: string | null;
   category_id: string | null;
   supplier_id: string | null;
-  cost_price: number;
+  cost_price: number | null;
   selling_price: number;
   low_stock_threshold: number;
   active: boolean;
@@ -112,7 +112,7 @@ export const loadBusinessData = createServerFn({ method: "POST" })
   .handler(({ data }) =>
     run(data.token, data.businessId, ANYONE, async (db) => {
       const products = await db.query(
-        `SELECT p.id, p.name, p.sku, p.barcode, p.category_id, p.supplier_id, p.cost_price::float8 AS cost_price, p.selling_price::float8 AS selling_price,
+        `SELECT p.id, p.name, p.sku, p.barcode, p.category_id, p.supplier_id, CASE WHEN app_role() IN ('owner', 'manager') THEN p.cost_price::float8 END AS cost_price, p.selling_price::float8 AS selling_price,
                 p.low_stock_threshold::float8 AS low_stock_threshold, p.active, i.quantity_on_hand::float8 AS quantity_on_hand
            FROM products p LEFT JOIN inventory i ON i.product_id = p.id AND i.business_id = p.business_id
           ORDER BY p.active DESC, p.name`,
@@ -988,6 +988,7 @@ export type StockRow = {
   id: string;
   name: string;
   sku: string;
+  supplier_id: string | null;
   cost_price: number;
   selling_price: number;
   low_stock_threshold: number;
@@ -1008,7 +1009,7 @@ export const getStockInsights = createServerFn({ method: "POST" })
                   COALESCE(sum(i.quantity - i.returned_quantity) FILTER (WHERE s.created_at >= now() - interval '90 days'), 0) AS u90
              FROM sale_items i JOIN sales s ON s.id = i.sale_id AND s.status IN ('completed', 'refunded')
             GROUP BY i.product_id)
-         SELECT p.id, p.name, p.sku, p.cost_price::float8 AS cost_price, p.selling_price::float8 AS selling_price,
+         SELECT p.id, p.name, p.sku, p.supplier_id, p.cost_price::float8 AS cost_price, p.selling_price::float8 AS selling_price,
                 p.low_stock_threshold::float8 AS low_stock_threshold, COALESCE(inv.quantity_on_hand, 0)::float8 AS quantity,
                 COALESCE(sold.u30, 0)::float8 AS units_30, COALESCE(sold.u90, 0)::float8 AS units_90,
                 GREATEST(0, floor(extract(epoch FROM (now() - p.created_at)) / 86400))::int AS age_days
@@ -1083,5 +1084,195 @@ export const deleteExpense = createServerFn({ method: "POST" })
         [userId, data.expenseId, JSON.stringify(result.rows[0])],
       );
       return true as const;
+    }),
+  );
+
+// ---- Purchase orders -----------------------------------------------------------------------------
+
+export type PoStatus = "draft" | "ordered" | "received" | "cancelled";
+export type PurchaseOrderRow = {
+  id: string;
+  po_number: string;
+  supplier_id: string;
+  supplier: string;
+  status: PoStatus;
+  created_at: string;
+  expected_date: string | null;
+  total: number;
+  items: number;
+  units_ordered: number;
+  units_received: number;
+};
+export type PurchaseOrderDetail = {
+  business: string;
+  order: {
+    id: string;
+    po_number: string;
+    status: PoStatus;
+    created_at: string;
+    ordered_at: string | null;
+    received_at: string | null;
+    expected_date: string | null;
+    notes: string | null;
+    supplier_id: string;
+  };
+  supplier: { name: string; phone: string | null; email: string | null };
+  items: {
+    id: string;
+    product_id: string;
+    name: string;
+    sku: string;
+    quantity: number;
+    unit_cost: number;
+    received_quantity: number;
+  }[];
+  total: number;
+};
+
+export const listPurchaseOrders = createServerFn({ method: "POST" })
+  .validator(z.object(inBusiness))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db) => {
+      const result = await db.query(
+        `SELECT po.id, po.po_number, po.supplier_id, s.name AS supplier, po.status::text AS status, po.created_at,
+                to_char(po.expected_date, 'YYYY-MM-DD') AS expected_date,
+                COALESCE(sum(i.quantity * i.unit_cost), 0)::float8 AS total, count(i.id)::int AS items,
+                COALESCE(sum(i.quantity), 0)::float8 AS units_ordered, COALESCE(sum(i.received_quantity), 0)::float8 AS units_received
+           FROM purchase_orders po
+           JOIN suppliers s ON s.id = po.supplier_id
+           LEFT JOIN purchase_order_items i ON i.purchase_order_id = po.id
+          GROUP BY po.id, s.name ORDER BY po.created_at DESC LIMIT 300`,
+      );
+      return result.rows as PurchaseOrderRow[];
+    }),
+  );
+
+export const getPurchaseOrder = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, poId: uuid }))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db) => {
+      const header = await db.query(
+        `SELECT po.id, po.po_number, po.status::text AS status, po.created_at, po.ordered_at, po.received_at,
+                to_char(po.expected_date, 'YYYY-MM-DD') AS expected_date, po.notes, po.supplier_id,
+                s.name AS supplier_name, s.phone AS supplier_phone, s.email AS supplier_email,
+                (SELECT name FROM businesses WHERE id = po.business_id) AS business
+           FROM purchase_orders po JOIN suppliers s ON s.id = po.supplier_id WHERE po.id = $1`,
+        [data.poId],
+      );
+      if (!header.rowCount) throw notFound("Purchase order");
+      const items = await db.query(
+        `SELECT i.id, i.product_id, p.name, p.sku, i.quantity::float8 AS quantity, i.unit_cost::float8 AS unit_cost, i.received_quantity::float8 AS received_quantity
+           FROM purchase_order_items i JOIN products p ON p.id = i.product_id WHERE i.purchase_order_id = $1 ORDER BY p.name`,
+        [data.poId],
+      );
+      const h = header.rows[0];
+      const rows = items.rows as PurchaseOrderDetail["items"];
+      return {
+        business: h.business as string,
+        order: {
+          id: h.id,
+          po_number: h.po_number,
+          status: h.status,
+          created_at: h.created_at,
+          ordered_at: h.ordered_at,
+          received_at: h.received_at,
+          expected_date: h.expected_date,
+          notes: h.notes,
+          supplier_id: h.supplier_id,
+        },
+        supplier: { name: h.supplier_name, phone: h.supplier_phone, email: h.supplier_email },
+        items: rows,
+        total: Math.round(rows.reduce((sum, i) => sum + i.quantity * i.unit_cost, 0) * 100) / 100,
+      } as PurchaseOrderDetail;
+    }),
+  );
+
+const poLines = z
+  .array(
+    z.object({
+      productId: uuid,
+      quantity: z.number().finite().positive().max(1_000_000),
+      unitCost: z.number().finite().min(0).max(100_000_000),
+    }),
+  )
+  .min(1)
+  .max(100);
+const poFields = {
+  supplierId: uuid,
+  items: poLines,
+  expectedDate: dateString.nullable(),
+  notes: z.string().trim().max(500).nullable(),
+};
+const poItemsJson = (items: { productId: string; quantity: number; unitCost: number }[]) =>
+  JSON.stringify(
+    items.map((i) => ({ product_id: i.productId, quantity: i.quantity, unit_cost: i.unitCost })),
+  );
+
+export const createPurchaseOrder = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, ...poFields, markOrdered: z.boolean() }))
+  .handler(({ data }) =>
+    run(
+      data.token,
+      data.businessId,
+      MANAGERS,
+      async (db) =>
+        (
+          await db.query("SELECT create_purchase_order($1, $2::jsonb, $3::date, $4, $5) AS id", [
+            data.supplierId,
+            poItemsJson(data.items),
+            data.expectedDate,
+            data.notes,
+            data.markOrdered,
+          ])
+        ).rows[0].id as string,
+    ),
+  );
+
+export const updatePurchaseOrder = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, ...poFields, poId: uuid }))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db) => {
+      await db.query("SELECT update_purchase_order($1, $2, $3::jsonb, $4::date, $5)", [
+        data.poId,
+        data.supplierId,
+        poItemsJson(data.items),
+        data.expectedDate,
+        data.notes,
+      ]);
+      return true as const;
+    }),
+  );
+
+export const setPurchaseOrderStatus = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, poId: uuid, status: z.enum(["ordered", "cancelled"]) }))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db) => {
+      await db.query("SELECT set_po_status($1, $2)", [data.poId, data.status]);
+      return true as const;
+    }),
+  );
+
+export const receivePurchaseOrder = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      ...inBusiness,
+      poId: uuid,
+      note: z.string().trim().max(200).nullable(),
+      items: z
+        .array(z.object({ itemId: uuid, quantity: z.number().finite().min(0) }))
+        .min(1)
+        .max(100),
+    }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, MANAGERS, async (db) => {
+      const items = data.items.map((i) => ({ item_id: i.itemId, quantity: i.quantity }));
+      return (
+        await db.query("SELECT receive_purchase_order($1, $2::jsonb, $3) AS status", [
+          data.poId,
+          JSON.stringify(items),
+          data.note,
+        ])
+      ).rows[0].status as PoStatus;
     }),
   );
