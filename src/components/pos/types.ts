@@ -29,6 +29,7 @@ export type Page =
   | "dashboard"
   | "pos"
   | "sales"
+  | "shifts"
   | "customers"
   | "reports"
   | "expenses"

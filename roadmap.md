@@ -13,3 +13,4 @@
 - [ ] 5. Payments: cash, card, bank transfer, M-Pesa Daraja with reconciliation.
 - [x] 6. Reports and analytics: daily/weekly/monthly sales, revenue, gross and net profit, expenses, top products with margins, salesperson performance, payment mix, stock valuation, fast/slow/dead stock, restock recommendations. Dashboard trend chart.
 - [ ] 7. Product images, PWA install and offline sales with safe sync.
+- [x] Cashier shifts and cash drawer: opening float, cash in/out with reasons, counted close with variance, automatic shift tagging of sales/refunds/repayments, optional "require a shift" rule, printable end-of-shift report.

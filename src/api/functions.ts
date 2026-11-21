@@ -138,6 +138,10 @@ export const loadBusinessData = createServerFn({ method: "POST" })
           WHERE status IN ('completed', 'refunded') AND created_at >= now() - interval '15 days'
           GROUP BY 1 ORDER BY 1`,
       );
+      const shiftInfo = await db.query(
+        `SELECT (SELECT require_shift FROM businesses WHERE id = app_business()) AS require_shift,
+                (SELECT row_to_json(x) FROM (SELECT id, opened_at FROM shifts WHERE cashier_id = app_user() AND status = 'open' LIMIT 1) x) AS open_shift`,
+      );
       const credit = await db.query(
         `SELECT COALESCE((SELECT sum(balance) FROM credit_accounts), 0)::float8 AS outstanding,
                 COALESCE((SELECT sum(credit_outstanding) FROM sales WHERE credit_outstanding > 0 AND due_date < current_date), 0)::float8 AS overdue`,
@@ -152,6 +156,8 @@ export const loadBusinessData = createServerFn({ method: "POST" })
         customersCount: customers.rows[0].count as number,
         creditOutstanding: credit.rows[0].outstanding as number,
         creditOverdue: credit.rows[0].overdue as number,
+        requireShift: shiftInfo.rows[0].require_shift as boolean,
+        openShift: shiftInfo.rows[0].open_shift as { id: string; opened_at: string } | null,
         trend: trend.rows.map((row) => ({
           bucket: row.bucket as string,
           sales: row.sales as number,
@@ -1274,5 +1280,186 @@ export const receivePurchaseOrder = createServerFn({ method: "POST" })
           data.note,
         ])
       ).rows[0].status as PoStatus;
+    }),
+  );
+
+// ---- Shifts & cash drawer ------------------------------------------------------------------------
+
+export type ShiftBreakdown = {
+  opening: number;
+  cash_sales: number;
+  credit_repayments: number;
+  pay_ins: number;
+  pay_outs: number;
+  cash_refunds: number;
+  expected: number;
+};
+export type ShiftRow = {
+  id: string;
+  cashier_id: string;
+  cashier: string | null;
+  status: "open" | "closed";
+  opened_at: string;
+  closed_at: string | null;
+  opening_float: number;
+  expected_cash: number | null;
+  counted_cash: number | null;
+  variance: number | null;
+  notes: string | null;
+  live_expected: number | null;
+};
+export type ShiftDetail = {
+  business: string;
+  shift: ShiftRow;
+  breakdown: ShiftBreakdown;
+  sales_count: number;
+  sales_total: number;
+  movements: {
+    id: string;
+    kind: "pay_in" | "pay_out";
+    amount: number;
+    reason: string | null;
+    created_at: string;
+    by: string | null;
+  }[];
+};
+
+const SHIFT_SELECT = `
+  SELECT s.id, s.cashier_id, member_name(s.cashier_id) AS cashier, s.status, s.opened_at, s.closed_at,
+         s.opening_float::float8 AS opening_float, s.expected_cash::float8 AS expected_cash, s.counted_cash::float8 AS counted_cash,
+         s.variance::float8 AS variance, s.notes, b.expected::float8 AS live_expected
+    FROM shifts s
+    LEFT JOIN LATERAL (SELECT expected FROM shift_breakdown(s.id) WHERE s.status = 'open') b ON true`;
+const BREAKDOWN_SELECT = `SELECT opening::float8 AS opening, cash_sales::float8 AS cash_sales, credit_repayments::float8 AS credit_repayments,
+  pay_ins::float8 AS pay_ins, pay_outs::float8 AS pay_outs, cash_refunds::float8 AS cash_refunds, expected::float8 AS expected FROM shift_breakdown($1)`;
+
+export const getShiftState = createServerFn({ method: "POST" })
+  .validator(z.object(inBusiness))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ANYONE, async (db) => {
+      const role = (await db.query("SELECT app_role() AS role")).rows[0].role as Role;
+      const mine = await db.query(
+        `${SHIFT_SELECT} WHERE s.cashier_id = app_user() AND s.status = 'open' LIMIT 1`,
+      );
+      const breakdown = mine.rowCount
+        ? ((await db.query(BREAKDOWN_SELECT, [mine.rows[0].id])).rows[0] as ShiftBreakdown)
+        : null;
+      const list = await db.query(
+        `${SHIFT_SELECT} WHERE ($1::boolean OR s.cashier_id = app_user()) ORDER BY s.opened_at DESC LIMIT 100`,
+        [role !== "cashier"],
+      );
+      const req = await db.query("SELECT require_shift FROM businesses WHERE id = app_business()");
+      return {
+        open: (mine.rows[0] ?? null) as ShiftRow | null,
+        breakdown,
+        shifts: list.rows as ShiftRow[],
+        requireShift: req.rows[0].require_shift as boolean,
+      };
+    }),
+  );
+
+export const getShift = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, shiftId: uuid }))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ANYONE, async (db) => {
+      const role = (await db.query("SELECT app_role() AS role")).rows[0].role as Role;
+      const found = await db.query(
+        `${SHIFT_SELECT} WHERE s.id = $1 AND ($2::boolean OR s.cashier_id = app_user())`,
+        [data.shiftId, role !== "cashier"],
+      );
+      if (!found.rowCount) throw notFound("Shift");
+      const breakdown = (await db.query(BREAKDOWN_SELECT, [data.shiftId]))
+        .rows[0] as ShiftBreakdown;
+      const sales = await db.query(
+        "SELECT count(*) FILTER (WHERE status IN ('completed', 'refunded'))::int AS n, COALESCE(sum(total) FILTER (WHERE status IN ('completed', 'refunded')), 0)::float8 AS total FROM sales WHERE shift_id = $1",
+        [data.shiftId],
+      );
+      const movements = await db.query(
+        "SELECT id, kind, amount::float8 AS amount, reason, created_at, member_name(created_by) AS by FROM cash_movements WHERE shift_id = $1 ORDER BY created_at",
+        [data.shiftId],
+      );
+      const business = await db.query("SELECT name FROM businesses WHERE id = app_business()");
+      return {
+        business: business.rows[0].name as string,
+        shift: found.rows[0] as ShiftRow,
+        breakdown,
+        sales_count: sales.rows[0].n as number,
+        sales_total: sales.rows[0].total as number,
+        movements: movements.rows as ShiftDetail["movements"],
+      } as ShiftDetail;
+    }),
+  );
+
+export const openShift = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, openingFloat: z.number().finite().min(0).max(100_000_000) }))
+  .handler(({ data }) =>
+    run(
+      data.token,
+      data.businessId,
+      ANYONE,
+      async (db) =>
+        (await db.query("SELECT open_shift($1) AS id", [data.openingFloat])).rows[0].id as string,
+    ),
+  );
+
+export const addCashMovement = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      ...inBusiness,
+      kind: z.enum(["pay_in", "pay_out"]),
+      amount: z.number().finite().positive().max(100_000_000),
+      reason: z.string().trim().max(200).nullable(),
+    }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ANYONE, async (db) =>
+      Number(
+        (
+          await db.query("SELECT add_cash_movement($1, $2, $3) AS expected", [
+            data.kind,
+            data.amount,
+            data.reason,
+          ])
+        ).rows[0].expected,
+      ),
+    ),
+  );
+
+export const closeShift = createServerFn({ method: "POST" })
+  .validator(
+    z.object({
+      ...inBusiness,
+      shiftId: uuid,
+      counted: z.number().finite().min(0).max(100_000_000),
+      notes: z.string().trim().max(300).nullable(),
+    }),
+  )
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ANYONE, async (db) =>
+      Number(
+        (
+          await db.query("SELECT close_shift($1, $2, $3) AS variance", [
+            data.shiftId,
+            data.counted,
+            data.notes,
+          ])
+        ).rows[0].variance,
+      ),
+    ),
+  );
+
+export const setRequireShift = createServerFn({ method: "POST" })
+  .validator(z.object({ ...inBusiness, value: z.boolean() }))
+  .handler(({ data }) =>
+    run(data.token, data.businessId, ["owner"], async (db, userId) => {
+      await db.query(
+        "UPDATE businesses SET require_shift = $1, updated_at = now() WHERE id = app_business()",
+        [data.value],
+      );
+      await db.query(
+        "INSERT INTO audit_logs (business_id, actor_id, action, entity, detail) VALUES (app_business(), $1, 'business.require_shift', 'business', $2::jsonb)",
+        [userId, JSON.stringify({ value: data.value })],
+      );
+      return data.value;
     }),
   );

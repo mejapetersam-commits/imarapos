@@ -4,6 +4,7 @@ import {
   Boxes,
   Building2,
   ClipboardList,
+  Clock,
   CreditCard,
   LayoutDashboard,
   LogOut,
@@ -31,6 +32,7 @@ const NAV: NavItem[] = [
   { id: "dashboard", label: "Dashboard", icon: LayoutDashboard, ready: true },
   { id: "pos", label: "Point of sale", icon: ShoppingCart, ready: true },
   { id: "sales", label: "Sales", icon: Receipt, ready: true },
+  { id: "shifts", label: "Shifts", icon: Clock, ready: true },
   { id: "inventory", label: "Inventory", icon: Boxes, ready: true },
   { id: "suppliers", label: "Suppliers", icon: Truck, ready: true },
   {

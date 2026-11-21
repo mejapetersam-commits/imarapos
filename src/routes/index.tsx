@@ -20,7 +20,16 @@ import {
   updateSupplier as updateSupplierFn,
   createExpense as createExpenseFn,
   createPurchaseOrder as createPurchaseOrderFn,
+  addCashMovement as addCashMovementFn,
+  closeShift as closeShiftFn,
   createSale as createSaleFn,
+  getShift as getShiftFn,
+  getShiftState as getShiftStateFn,
+  openShift as openShiftFn,
+  setRequireShift as setRequireShiftFn,
+  type ShiftBreakdown,
+  type ShiftDetail,
+  type ShiftRow,
   getPurchaseOrder as getPurchaseOrderFn,
   listPurchaseOrders as listPurchaseOrdersFn,
   receivePurchaseOrder as receivePurchaseOrderFn,
@@ -66,6 +75,8 @@ import { PurchaseOrderDetail } from "@/components/pos/PurchaseOrderDetail";
 import { PurchaseOrderForm, type PoPayload } from "@/components/pos/PurchaseOrderForm";
 import { PurchaseOrders } from "@/components/pos/PurchaseOrders";
 import { Reports } from "@/components/pos/Reports";
+import { ShiftReport } from "@/components/pos/ShiftReport";
+import { Shifts } from "@/components/pos/Shifts";
 import { POS, type SaleRequest } from "@/components/pos/POS";
 import { ReceiptDialog } from "@/components/pos/ReceiptDialog";
 import { Sales } from "@/components/pos/Sales";
@@ -146,6 +157,17 @@ function Index() {
   const [expensesLoading, setExpensesLoading] = useState(false);
   const [expenseForm, setExpenseForm] = useState(false);
   const [trend, setTrend] = useState<SeriesPoint[]>([]);
+  const [requireShift, setRequireShift] = useState(false);
+  const [openShiftInfo, setOpenShiftInfo] = useState<{ id: string; opened_at: string } | null>(
+    null,
+  );
+  const [shiftState, setShiftState] = useState<{
+    open: ShiftRow | null;
+    breakdown: ShiftBreakdown | null;
+    shifts: ShiftRow[];
+  } | null>(null);
+  const [shiftsLoading, setShiftsLoading] = useState(false);
+  const [shiftDetail, setShiftDetail] = useState<ShiftDetail | null>(null);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrderRow[]>([]);
   const [poLoading, setPoLoading] = useState(false);
   const [poDetail, setPoDetail] = useState<PurchaseOrderDetailData | null>(null);
@@ -256,6 +278,7 @@ function Index() {
   useEffect(() => {
     setReport(null);
     setStockRows(null);
+    setShiftState(null);
     setPurchaseOrders([]);
     setExpenses([]);
     expensesRange.current = null;
@@ -267,6 +290,10 @@ function Index() {
       if (!stockRows) void loadStock();
     }
   }, [activePage, activeBusiness?.id, role]);
+
+  useEffect(() => {
+    if (activePage === "shifts" && activeBusiness) void loadShiftState(activeBusiness);
+  }, [activePage, activeBusiness?.id]);
 
   useEffect(() => {
     if ((activePage === "customers" || activePage === "pos") && activeBusiness)
@@ -342,6 +369,8 @@ function Index() {
       setCreditOutstanding(result.creditOutstanding);
       setCreditOverdue(result.creditOverdue);
       setTrend(result.trend);
+      setRequireShift(result.requireShift);
+      setOpenShiftInfo(result.openShift);
     }
     setLoading(false);
   }
@@ -1051,6 +1080,88 @@ function Index() {
     });
   }
 
+  async function loadShiftState(business: Business) {
+    setShiftsLoading(true);
+    const result = await api((token) =>
+      getShiftStateFn({ data: { token, businessId: business.id } }),
+    );
+    if (result) {
+      setShiftState({ open: result.open, breakdown: result.breakdown, shifts: result.shifts });
+      setRequireShift(result.requireShift);
+      setOpenShiftInfo(
+        result.open ? { id: result.open.id, opened_at: result.open.opened_at } : null,
+      );
+    }
+    setShiftsLoading(false);
+  }
+
+  async function startShift(openingFloat: number) {
+    if (!activeBusiness) return;
+    await guarded(async () => {
+      const id = await api((token) =>
+        openShiftFn({ data: { token, businessId: activeBusiness.id, openingFloat } }),
+      );
+      if (!id) return;
+      toast.success("Shift opened.");
+      await loadShiftState(activeBusiness);
+    });
+  }
+
+  async function cashMovement(kind: "pay_in" | "pay_out", amount: number, reason: string | null) {
+    if (!activeBusiness) return false;
+    let saved = false;
+    await guarded(async () => {
+      const expected = await api((token) =>
+        addCashMovementFn({ data: { token, businessId: activeBusiness.id, kind, amount, reason } }),
+      );
+      if (expected === null) return;
+      saved = true;
+      toast.success(kind === "pay_in" ? "Cash added to the drawer." : "Cash taken out recorded.");
+      await loadShiftState(activeBusiness);
+    });
+    return saved;
+  }
+
+  async function endShift(shiftId: string, counted: number, notes: string | null) {
+    if (!activeBusiness) return false;
+    let saved = false;
+    await guarded(async () => {
+      const variance = await api((token) =>
+        closeShiftFn({ data: { token, businessId: activeBusiness.id, shiftId, counted, notes } }),
+      );
+      if (variance === null) return;
+      saved = true;
+      toast.success(
+        Math.abs(variance) < 0.005
+          ? "Shift closed. The drawer balances."
+          : `Shift closed. ${variance > 0 ? "Over" : "Short"} by KES ${Math.abs(variance).toLocaleString("en-KE")}.`,
+      );
+      await loadShiftState(activeBusiness);
+      await viewShift(shiftId);
+    });
+    return saved;
+  }
+
+  async function toggleRequireShift(value: boolean) {
+    if (!activeBusiness) return;
+    await guarded(async () => {
+      const done = await api((token) =>
+        setRequireShiftFn({ data: { token, businessId: activeBusiness.id, value } }),
+      );
+      if (done === null) return;
+      setRequireShift(value);
+      toast.success(value ? "A shift is now required to sell." : "Shifts are optional again.");
+    });
+  }
+
+  async function viewShift(shiftId: string) {
+    if (!activeBusiness) return;
+    const found = await api((token) =>
+      getShiftFn({ data: { token, businessId: activeBusiness.id, shiftId } }),
+    );
+    if (found) setShiftDetail(found);
+  }
+
   async function signOut() {
     await authClient.signOut();
     setUser(null);
@@ -1157,9 +1268,29 @@ function Index() {
           customerId={posCustomerId}
           onCustomerChange={setPosCustomerId}
           onQuickAddCustomer={() => setCustomerForm("new")}
+          requireShift={requireShift}
+          openShift={openShiftInfo}
+          onOpenShifts={() => setActivePage("shifts")}
           loading={loading}
           saving={saving}
           onComplete={completeSale}
+        />
+      ) : activePage === "shifts" ? (
+        <Shifts
+          open={shiftState?.open ?? null}
+          breakdown={shiftState?.breakdown ?? null}
+          shifts={shiftState?.shifts ?? []}
+          requireShift={requireShift}
+          isOwner={role === "owner"}
+          canManage={canManage}
+          userId={user.id}
+          loading={shiftsLoading && !shiftState}
+          saving={saving}
+          onOpenShift={(amount) => void startShift(amount)}
+          onMovement={cashMovement}
+          onCloseShift={endShift}
+          onToggleRequire={(value) => void toggleRequireShift(value)}
+          onView={(id) => void viewShift(id)}
         />
       ) : activePage === "purchases" && canManage ? (
         <PurchaseOrders
@@ -1336,6 +1467,7 @@ function Index() {
           onClose={() => setCustomerForm(null)}
         />
       )}
+      {shiftDetail && <ShiftReport detail={shiftDetail} onClose={() => setShiftDetail(null)} />}
       {poDetail && !poForm && (
         <PurchaseOrderDetail
           detail={poDetail}

@@ -44,6 +44,9 @@ type Props = {
   customerId: string | null;
   onCustomerChange: (id: string | null) => void;
   onQuickAddCustomer: () => void;
+  requireShift: boolean;
+  openShift: { id: string; opened_at: string } | null;
+  onOpenShifts: () => void;
   loading: boolean;
   saving: boolean;
   /** Resolves true when the sale was recorded. The same clientUuid is reused on retry, so a resend can never double-charge. */
@@ -58,6 +61,9 @@ export function POS({
   customerId,
   onCustomerChange,
   onQuickAddCustomer,
+  requireShift,
+  openShift,
+  onOpenShifts,
   loading,
   saving,
   onComplete,
@@ -103,7 +109,9 @@ export function POS({
   const due = cashDue(total, creditValue);
   const tenderedValue = Number(tendered) || 0;
   const change = changeDue(total, tenderedValue, creditValue);
+  const gated = requireShift && !openShift;
   const ready =
+    !gated &&
     canComplete(lines, discountValue, tenderedValue, creditValue) &&
     creditValue <= available &&
     !saving;
@@ -170,8 +178,21 @@ export function POS({
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Point of sale</h1>
           <p className="text-sm text-muted-foreground">
             Scan a barcode or search, then tap a product to add it.
+            {openShift &&
+              ` Shift open since ${new Date(openShift.opened_at).toLocaleTimeString("en-KE", { hour: "2-digit", minute: "2-digit" })}.`}
           </p>
         </div>
+        {gated && (
+          <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm">
+            <span className="min-w-0 flex-1 text-amber-900">
+              <span className="font-medium">Open a shift to start selling.</span> Your business
+              requires a shift so cash is tracked against a drawer count.
+            </span>
+            <Button size="sm" onClick={onOpenShifts}>
+              Open a shift
+            </Button>
+          </div>
+        )}
         <div className="relative">
           <Search
             size={16}
